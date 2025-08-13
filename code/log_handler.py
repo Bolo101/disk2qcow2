@@ -6,7 +6,7 @@ from typing import List
 import textwrap
 
 # Define the log file path
-log_file = "/var/log/disk_erase.log"
+log_file = "/var/log/disk2qcow2.log"
 
 # Session tracking - capture all logs during current session
 _session_logs = []
@@ -167,7 +167,7 @@ def generate_session_pdf() -> str:
         raise ValueError("No session logs available to generate PDF")
     
     # Create output directory if it doesn't exist
-    output_dir = "/tmp/disk_cloner_logs"
+    output_dir = "/tmp/disk2qcow2_logs"
     try:
         os.makedirs(output_dir, exist_ok=True)
     except PermissionError:
@@ -224,7 +224,7 @@ def generate_log_file_pdf() -> str:
         OSError: If filesystem operations fail
     """
     # Create output directory if it doesn't exist
-    output_dir = "/tmp/disk_cloner_logs"
+    output_dir = "/tmp/disk2qcow2_logs"
     try:
         os.makedirs(output_dir, exist_ok=True)
     except PermissionError:
