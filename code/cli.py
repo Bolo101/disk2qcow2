@@ -57,7 +57,7 @@ class P2VConverterCLI:
     def print_header(self):
         """Print application header"""
         print("=" * 70)
-        print("🖥️  Physical to Virtual (P2V) Converter - CLI")
+        print("🖥️ Physical to Virtual (P2V) Converter - CLI")
         print("=" * 70)
         print()
     
@@ -135,6 +135,9 @@ class P2VConverterCLI:
             except KeyboardInterrupt:
                 print("\n👋 Operation cancelled")
                 return None
+            except EOFError:
+                print("\n👋 End of input - operation cancelled")
+                return None
     
     def get_vm_name_interactive(self, default_name: str) -> Optional[str]:
         """Interactively get VM name"""
@@ -158,6 +161,9 @@ class P2VConverterCLI:
             except KeyboardInterrupt:
                 print("\n👋 Operation cancelled")
                 return None
+            except EOFError:
+                print("\n👋 End of input - operation cancelled")
+                return None
     
     def get_output_dir_interactive(self, default_dir: str) -> Optional[str]:
         """Interactively get output directory"""
@@ -175,11 +181,24 @@ class P2VConverterCLI:
                     os.makedirs(output_dir, exist_ok=True)
                     print(f"✅ Output directory: {output_dir}")
                     return output_dir
-                except Exception as e:
-                    print(f"❌ Cannot create directory: {e}")
+                except PermissionError:
+                    print(f"❌ Permission denied: Cannot create directory '{output_dir}'")
+                except OSError as e:
+                    if e.errno == 28:  # No space left on device
+                        print(f"❌ No space left on device: Cannot create directory '{output_dir}'")
+                    elif e.errno == 30:  # Read-only file system
+                        print(f"❌ Read-only file system: Cannot create directory '{output_dir}'")
+                    else:
+                        print(f"❌ OS error creating directory: {e}")
+                except FileExistsError:
+                    # This shouldn't happen with exist_ok=True, but just in case
+                    print(f"❌ Directory already exists and cannot be accessed: {output_dir}")
             
             except KeyboardInterrupt:
                 print("\n👋 Operation cancelled")
+                return None
+            except EOFError:
+                print("\n👋 End of input - operation cancelled")
                 return None
     
     def check_space_requirements(self, source_device: str, output_dir: str) -> bool:
@@ -207,15 +226,42 @@ class P2VConverterCLI:
                 self.add_session_log("Space check failed - insufficient space", "ERROR")
                 return False
                 
-        except Exception as e:
-            error_msg = f"Error checking space requirements: {str(e)}"
+        except FileNotFoundError:
+            error_msg = f"Source device not found: {source_device}"
+            print(f"❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            return False
+        except PermissionError:
+            error_msg = f"Permission denied accessing source device: {source_device}"
+            print(f"❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            return False
+        except OSError as e:
+            if e.errno == 2:  # No such file or directory
+                error_msg = f"Source device not found: {source_device}"
+            elif e.errno == 13:  # Permission denied
+                error_msg = f"Permission denied accessing source device: {source_device}"
+            elif e.errno == 5:  # Input/output error
+                error_msg = f"I/O error accessing source device: {source_device}"
+            else:
+                error_msg = f"OS error accessing source device {source_device}: {e}"
+            print(f"❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            return False
+        except ValueError as e:
+            error_msg = f"Invalid disk size or format for {source_device}: {e}"
+            print(f"❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            return False
+        except KeyError as e:
+            error_msg = f"Missing disk information for {source_device}: {e}"
             print(f"❌ {error_msg}")
             self.add_session_log(error_msg, "ERROR")
             return False
     
     def confirm_conversion(self, source_device: str, vm_name: str, output_dir: str) -> bool:
         """Confirm conversion parameters"""
-        print(f"\n🔍 Conversion Summary:")
+        print(f"\n📋 Conversion Summary:")
         print("-" * 50)
         print(f"Source disk:      {source_device}")
         print(f"VM name:          {vm_name}")
@@ -228,12 +274,12 @@ class P2VConverterCLI:
         is_system = any(f"/dev/{active}" in source_device for active in active_disks)
         
         if is_system:
-            print("⚠️  WARNING: You are about to convert the SYSTEM DISK!")
+            print("⚠️ WARNING: You are about to convert the SYSTEM DISK!")
             print("   This operation will read from the active system disk.")
             print("   System performance may be affected during conversion.")
             print()
         
-        print("⚠️  This operation may take a significant amount of time.")
+        print("⚠️ This operation may take a significant amount of time.")
         print("   The process will create a compressed qcow2 virtual machine.")
         print()
         
@@ -242,6 +288,9 @@ class P2VConverterCLI:
             return confirm in ('yes', 'y')
         except KeyboardInterrupt:
             print("\n👋 Operation cancelled")
+            return False
+        except EOFError:
+            print("\n👋 End of input - operation cancelled")
             return False
     
     def progress_callback(self, percent: float, status: str):
@@ -296,18 +345,56 @@ class P2VConverterCLI:
                 log_info("P2V conversion completed successfully")
                 return True
             else:
-                print(f"\n⚠️  Conversion was cancelled by user")
+                print(f"\n⚠️ Conversion was cancelled by user")
                 self.add_session_log("P2V conversion cancelled by user", "WARNING")
                 return False
                 
         except KeyboardInterrupt:
-            print(f"\n⚠️  Conversion cancelled by user")
+            print(f"\n⚠️ Conversion cancelled by user")
             self.add_session_log("P2V conversion cancelled by user", "WARNING")
             return False
-        except Exception as e:
-            print(f"\n❌ Conversion failed: {str(e)}")
-            self.add_session_log(f"P2V conversion failed: {str(e)}", "ERROR")
-            log_error(f"P2V conversion failed: {str(e)}")
+        except FileNotFoundError as e:
+            error_msg = f"File not found during conversion: {e}"
+            print(f"\n❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
+            return False
+        except PermissionError as e:
+            error_msg = f"Permission denied during conversion: {e}"
+            print(f"\n❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
+            return False
+        except OSError as e:
+            if e.errno == 28:  # No space left on device
+                error_msg = "No space left on device during conversion"
+            elif e.errno == 5:  # Input/output error
+                error_msg = f"I/O error during conversion: {e}"
+            elif e.errno == 16:  # Device or resource busy
+                error_msg = f"Device busy during conversion: {e}"
+            else:
+                error_msg = f"OS error during conversion: {e}"
+            print(f"\n❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
+            return False
+        except ValueError as e:
+            error_msg = f"Invalid parameter during conversion: {e}"
+            print(f"\n❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
+            return False
+        except RuntimeError as e:
+            error_msg = f"Runtime error during conversion: {e}"
+            print(f"\n❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
+            return False
+        except MemoryError:
+            error_msg = "Insufficient memory for conversion operation"
+            print(f"\n❌ {error_msg}")
+            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
             return False
         finally:
             self.conversion_started = False
@@ -326,8 +413,23 @@ class P2VConverterCLI:
             
             return True
             
-        except Exception as e:
-            print(f"❌ Failed to generate PDF: {str(e)}")
+        except FileNotFoundError as e:
+            print(f"❌ File not found for PDF generation: {e}")
+            return False
+        except PermissionError as e:
+            print(f"❌ Permission denied for PDF generation: {e}")
+            return False
+        except ImportError as e:
+            print(f"❌ Missing required library for PDF generation: {e}")
+            return False
+        except OSError as e:
+            if e.errno == 28:  # No space left on device
+                print(f"❌ No space left on device for PDF generation")
+            else:
+                print(f"❌ OS error during PDF generation: {e}")
+            return False
+        except ValueError as e:
+            print(f"❌ Invalid data for PDF generation: {e}")
             return False
     
     def run_interactive(self):
@@ -379,6 +481,8 @@ class P2VConverterCLI:
                     self.generate_pdf_report("session")
             except KeyboardInterrupt:
                 pass
+            except EOFError:
+                pass
         
         return 0 if success else 1
     
@@ -409,8 +513,19 @@ class P2VConverterCLI:
         output_dir = args.output
         try:
             os.makedirs(output_dir, exist_ok=True)
-        except Exception as e:
-            print(f"❌ Cannot create output directory: {e}")
+        except PermissionError:
+            print(f"❌ Permission denied: Cannot create output directory '{output_dir}'")
+            return 1
+        except OSError as e:
+            if e.errno == 28:  # No space left on device
+                print(f"❌ No space left on device: Cannot create output directory '{output_dir}'")
+            elif e.errno == 30:  # Read-only file system
+                print(f"❌ Read-only file system: Cannot create directory '{output_dir}'")
+            else:
+                print(f"❌ OS error creating output directory: {e}")
+            return 1
+        except FileExistsError:
+            print(f"❌ Directory already exists and cannot be accessed: {output_dir}")
             return 1
         
         # Check space if requested
@@ -420,10 +535,10 @@ class P2VConverterCLI:
                     print("❌ Insufficient space. Use --force to override or --skip-space-check to skip.")
                     return 1
                 else:
-                    print("⚠️  Insufficient space detected, but --force specified. Continuing...")
+                    print("⚠️ Insufficient space detected, but --force specified. Continuing...")
         
         # Show conversion info
-        print(f"🔍 Conversion Parameters:")
+        print(f"📋 Conversion Parameters:")
         print(f"   Source: {source_device}")
         print(f"   VM Name: {vm_name}")
         print(f"   Output: {output_dir}")
@@ -541,6 +656,18 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n👋 Operation cancelled by user")
         sys.exit(130)
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+    except SystemExit:
+        # Re-raise SystemExit to maintain proper exit codes
+        raise
+    except ImportError as e:
+        print(f"\n❌ Missing required module: {e}")
+        sys.exit(1)
+    except PermissionError:
+        print(f"\n❌ Permission denied - ensure you're running with sufficient privileges")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"\n❌ Required file not found: {e}")
+        sys.exit(1)
+    except OSError as e:
+        print(f"\n❌ Operating system error: {e}")
         sys.exit(1)
