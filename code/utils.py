@@ -69,11 +69,28 @@ def run_command_with_progress(command_list: list[str], progress_callback=None, s
         log_error("Operation interrupted by user")
         raise
 
+def get_disk_label(device: str) -> str:
+    """
+    Get the label of a disk device using lsblk.
+    Returns the label or "No Label" if none exists.
+    """
+    try:
+        # Use lsblk to get label information for all partitions on the device
+        output = run_command(["lsblk", "-o", "LABEL", "-n", f"/dev/{device}"], raise_on_error=False)
+        if output and output.strip():
+            # Get the first non-empty label (in case of multiple partitions)
+            labels = [line.strip() for line in output.split('\n') if line.strip()]
+            if labels:
+                return labels[0]
+        return "No Label"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "Unknown"
+
 def get_disk_list() -> list[dict]:
     """
     Get list of available disks as structured data.
     Returns a list of dictionaries with disk information.
-    Each dictionary contains: 'device', 'size', 'model', 'size_bytes'.
+    Each dictionary contains: 'device', 'size', 'model', 'size_bytes', 'label', and 'is_active'.
     """
     try:
         # Use more explicit column specification with -o option and -n to skip header
@@ -85,6 +102,15 @@ def get_disk_list() -> list[dict]:
             if not output:
                 log_info("No disks detected. Ensure the program is run with appropriate permissions.")
                 return []
+        
+        # Get active disks for marking
+        active_disks = get_active_disk() or []
+        active_disk_names = set()
+        for active_device in active_disks:
+            if isinstance(active_device, str):
+                # Remove /dev/ prefix if present
+                base_name = active_device.replace('/dev/', '')
+                active_disk_names.add(base_name)
         
         # Parse the output from lsblk command
         disks = []
@@ -98,17 +124,29 @@ def get_disk_list() -> list[dict]:
             
             # Ensure we have at least NAME and SIZE
             if len(parts) >= 2:
-                size_bytes = int(parts[1])
-                size_human = format_bytes(size_bytes)
+                try:
+                    size_bytes = int(parts[1])
+                    size_human = format_bytes(size_bytes)
+                except (ValueError, IndexError):
+                    size_bytes = 0
+                    size_human = "Unknown"
                 
                 # MODEL may be missing, set to "Unknown" if it is
                 model = parts[3] if len(parts) > 3 else "Unknown"
+                
+                # Get disk label
+                label = get_disk_label(device)
+                
+                # Check if this disk is active (system disk)
+                is_active = device in active_disk_names
                 
                 disks.append({
                     "device": f"/dev/{device}",
                     "size": size_human,
                     "size_bytes": size_bytes,
-                    "model": model
+                    "model": model,
+                    "label": label,
+                    "is_active": is_active
                 })
         return disks
     except FileNotFoundError as e:
@@ -347,11 +385,16 @@ def get_disk_info(device: str) -> dict:
                               capture_output=True, text=True, check=True)
         model = result.stdout.strip() or "Unknown"
         
+        # Get label
+        device_name = device.replace('/dev/', '')
+        label = get_disk_label(device_name)
+        
         return {
             'device': device,
             'size_bytes': size_bytes,
             'size_human': format_bytes(size_bytes),
-            'model': model
+            'model': model,
+            'label': label
         }
         
     except Exception as e:
@@ -360,7 +403,8 @@ def get_disk_info(device: str) -> dict:
             'device': device,
             'size_bytes': 0,
             'size_human': "Unknown",
-            'model': "Unknown"
+            'model': "Unknown",
+            'label': "Unknown"
         }
 
 def validate_vm_name(name: str) -> tuple[bool, str]:
@@ -394,22 +438,62 @@ def get_active_disk():
         # Initialize devices set for collecting all active devices
         devices = set()
         
-        # Check /proc/mounts for root filesystem
-        with open('/proc/mounts', 'r') as f:
-            for line in f:
-                if line.strip() and ' / ' in line:
+        # Method 1: Check /proc/mounts for root filesystem
+        try:
+            with open('/proc/mounts', 'r') as f:
+                for line in f:
+                    if line.strip() and ' / ' in line:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            root_device = parts[0]
+                            
+                            # Extract device name with improved regex for NVMe
+                            match = re.search(r'/dev/([a-zA-Z]+\d*[a-zA-Z]*\d*)', root_device)
+                            if match:
+                                device_name = match.group(1)
+                                # Get base disk name
+                                base_device = get_base_disk(device_name)
+                                devices.add(base_device)
+                            break
+        except (IOError, OSError):
+            log_warning("Could not read /proc/mounts")
+        
+        # Method 2: Use lsblk to find mounted root filesystems
+        try:
+            # Get all block devices with mount points
+            output = run_command(["lsblk", "-o", "NAME,MOUNTPOINT", "-n"], raise_on_error=False)
+            for line in output.split('\n'):
+                if ' /' in line and line.strip().endswith(' /'):
+                    # This is mounted as root
                     parts = line.split()
-                    if len(parts) >= 2:
-                        root_device = parts[0]
-                        
-                        # Extract device name with improved regex for NVMe
-                        match = re.search(r'/dev/([a-zA-Z]+\d*[a-zA-Z]*\d*)', root_device)
-                        if match:
-                            device_name = match.group(1)
-                            # Get base disk name
-                            base_device = get_base_disk(device_name)
-                            devices.add(base_device)
-                        break
+                    if parts:
+                        device_name = parts[0].strip()
+                        # Remove any tree characters from lsblk output
+                        device_name = re.sub(r'^[├└─│\s]+', '', device_name)
+                        base_device = get_base_disk(device_name)
+                        devices.add(base_device)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            log_warning("Could not use lsblk to detect active disks")
+        
+        # Method 3: Check for logical volumes and map to physical drives
+        try:
+            # Get all logical volumes that might be active
+            active_logical_devices = []
+            
+            # Check /proc/mounts for any mapper devices
+            with open('/proc/mounts', 'r') as f:
+                for line in f:
+                    if '/dev/mapper/' in line:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            active_logical_devices.append(parts[0])
+            
+            if active_logical_devices:
+                physical_drives = get_physical_drives_for_logical_volumes(active_logical_devices)
+                devices.update(physical_drives)
+                
+        except (IOError, OSError):
+            log_warning("Could not check for logical volumes")
         
         if devices:
             return list(devices)
@@ -420,6 +504,80 @@ def get_active_disk():
     except Exception as e:
         log_error(f"Error detecting active disk: {str(e)}")
         return None
+
+def get_physical_drives_for_logical_volumes(active_devices: list) -> set:
+    """
+    Map logical volumes (LVM, etc.) to their underlying physical drives.
+    
+    Args:
+        active_devices: List of active device paths (e.g., ['/dev/mapper/rocket--vg-root'])
+    
+    Returns:
+        Set of physical drive names (e.g., {'nvme0n1', 'sda'})
+    """
+    if not active_devices:
+        return set()
+    
+    physical_drives = set()
+    
+    try:
+        # Get all physical drives from disk list
+        disk_list = get_disk_list()
+        physical_device_names = [disk['device'].replace('/dev/', '') for disk in disk_list]
+        
+        for physical_device in physical_device_names:
+            try:
+                # Use lsblk to get the complete device tree for this physical drive
+                # -o NAME shows device names, -l shows in list format, -n removes headers
+                output = run_command([
+                    "lsblk", 
+                    f"/dev/{physical_device}", 
+                    "-o", "NAME", 
+                    "-l", 
+                    "-n"
+                ], raise_on_error=False)
+                
+                # Parse the output to get all devices in the tree
+                device_tree = []
+                for line in output.strip().split('\n'):
+                    if line.strip():
+                        device_name = line.strip()
+                        # Add both with and without /dev/ prefix for comparison
+                        device_tree.append(f"/dev/{device_name}")
+                        device_tree.append(device_name)
+                
+                # Check if any active device is in this physical drive's tree
+                for active_device in active_devices:
+                    # Handle different formats of device names
+                    active_variants = [
+                        active_device,
+                        active_device.replace('/dev/', ''),
+                        active_device.replace('/dev/mapper/', '')
+                    ]
+                    
+                    # Check if any variant of the active device is in the device tree
+                    for variant in active_variants:
+                        if variant in device_tree:
+                            physical_drives.add(physical_device)
+                            log_info(f"Found active device '{active_device}' on physical drive '{physical_device}'")
+                            break
+                    
+                    if physical_device in physical_drives:
+                        break
+                        
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                # Skip this physical device if lsblk fails
+                log_error(f"Could not query device tree for {physical_device}: {str(e)}")
+                continue
+                
+    except (AttributeError, TypeError) as e:
+        log_error(f"Error processing device data structures: {str(e)}")
+    except MemoryError:
+        log_error("Insufficient memory to process logical volume mapping")
+    except OSError as e:
+        log_error(f"OS error during logical volume mapping: {str(e)}")
+    
+    return physical_drives
 
 def get_base_disk(device_name: str) -> str:
     """
@@ -447,3 +605,25 @@ def get_base_disk(device_name: str) -> str:
     except Exception as e:
         log_error(f"Error processing device name '{device_name}': {str(e)}")
         return device_name
+
+def is_system_disk(device_path: str) -> bool:
+    """
+    Check if the given device path is a system disk (active/mounted).
+    Args:
+        device_path: Full device path (e.g., '/dev/sda')
+    Returns:
+        bool: True if it's a system disk, False otherwise
+    """
+    try:
+        # Extract device name without /dev/ prefix
+        device_name = device_path.replace('/dev/', '')
+        
+        # Get list of active disks
+        active_disks = get_active_disk()
+        if active_disks:
+            return device_name in active_disks
+        
+        return False
+    except Exception as e:
+        log_error(f"Error checking if {device_path} is system disk: {str(e)}")
+        return False

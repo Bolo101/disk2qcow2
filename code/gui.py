@@ -15,7 +15,8 @@ from log_handler import (log_info, log_error, log_warning, generate_session_pdf,
                         log_application_exit, get_current_session_logs, 
                         is_session_active)
 from utils import (get_disk_list, get_directory_space, check_output_space, check_qemu_tools, 
-                   create_vm_from_disk, validate_vm_name, format_bytes, get_active_disk)
+                   create_vm_from_disk, validate_vm_name, format_bytes, get_active_disk,
+                   get_disk_info, is_system_disk)
 
 class P2VConverterGUI:
     """GUI class for the P2V Converter application"""
@@ -35,6 +36,9 @@ class P2VConverterGUI:
         # VM configuration variables
         self.vm_name = tk.StringVar(value="converted_vm")
         self.output_path = tk.StringVar(value="/tmp/p2v_output")
+        
+        # Store current disk list for reference
+        self.current_disks = []
         
         # Configure the main window
         self.setup_window()
@@ -190,7 +194,7 @@ class P2VConverterGUI:
         control_frame = ttk.Frame(main_frame)
         control_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         
-        self.check_space_btn = ttk.Button(control_frame, text="🔍 Check Space Requirements", 
+        self.check_space_btn = ttk.Button(control_frame, text="📏 Check Space Requirements", 
                                          command=self.check_space_requirements)
         self.check_space_btn.grid(row=0, column=0, padx=(0, 10))
         
@@ -352,14 +356,24 @@ class P2VConverterGUI:
         try:
             log_info("Refreshing disk list")
             
-            # Get list of disks
-            disks = get_disk_list()
+            # Get list of disks using updated function
+            self.current_disks = get_disk_list()
             
-            if disks:
-                # Format disk info for display
+            if self.current_disks:
+                # Format disk info for display with improved labeling
                 disk_options = []
-                for disk in disks:
+                for disk in self.current_disks:
+                    # Create base display string
                     disk_info = f"{disk['device']} ({disk['size']}) - {disk['model']}"
+                    
+                    # Add label if available
+                    if disk['label'] and disk['label'] != "No Label":
+                        disk_info += f" [{disk['label']}]"
+                    
+                    # Mark system/active disks
+                    if disk.get('is_active', False):
+                        disk_info = f"🟡 {disk_info} [SYSTEM DISK]"
+                    
                     disk_options.append(disk_info)
                 
                 # Update combobox
@@ -369,28 +383,41 @@ class P2VConverterGUI:
                 if self.source_var.get() not in disk_options:
                     self.source_var.set("")
                 
-                # Highlight system disk
-                active_disks = get_active_disk()
-                if active_disks:
-                    for i, disk_info in enumerate(disk_options):
-                        for active_disk in active_disks:
-                            if f"/dev/{active_disk}" in disk_info:
-                                # Mark as system disk
-                                disk_options[i] = f"🟡 {disk_info} [SYSTEM DISK]"
-                                break
-                    self.source_combo['values'] = disk_options
+                log_info(f"Found {len(self.current_disks)} disk(s)")
                 
-                log_info(f"Found {len(disks)} disk(s)")
-                self.status_var.set(f"Found {len(disks)} disk(s)")
+                # Count active disks for status
+                active_count = sum(1 for disk in self.current_disks if disk.get('is_active', False))
+                if active_count > 0:
+                    self.status_var.set(f"Found {len(self.current_disks)} disk(s) ({active_count} active)")
+                else:
+                    self.status_var.set(f"Found {len(self.current_disks)} disk(s)")
                 
             else:
                 log_warning("No disks found")
                 self.status_var.set("No disks found")
+                self.source_combo['values'] = []
                 
         except Exception as e:
             error_msg = f"Error refreshing disks: {str(e)}"
             log_error(error_msg)
             messagebox.showerror("Error", error_msg)
+            self.status_var.set("Error refreshing disks")
+    
+    def get_selected_disk_info(self):
+        """Get disk info for currently selected disk"""
+        selected = self.source_var.get()
+        if not selected:
+            return None
+        
+        # Extract device path from display string
+        device_path = selected.split(' ')[0].replace('🟡 ', '')
+        
+        # Find matching disk in current_disks
+        for disk in self.current_disks:
+            if disk['device'] == device_path:
+                return disk
+        
+        return None
     
     def on_source_selected(self, event=None):
         """Handle source disk selection"""
@@ -398,11 +425,47 @@ class P2VConverterGUI:
         if selected:
             # Extract device path
             device_path = selected.split(' ')[0].replace('🟡 ', '')
+            
+            # Check if this is an active/system disk
+            if is_system_disk(device_path) or "SYSTEM DISK" in selected:
+                # Show warning and refuse selection
+                messagebox.showerror("Active Disk Selection Denied", 
+                                   f"🚫 Cannot Select Active System Disk\n\n"
+                                   f"The selected disk ({device_path}) is currently active and in use by the system.\n\n"
+                                   f"Converting an active system disk is not recommended as it may:\n"
+                                   f"• Cause system instability\n"
+                                   f"• Result in incomplete or corrupted conversion\n"
+                                   f"• Interfere with running system processes\n\n"
+                                   f"Please:\n"
+                                   f"• Select a different, inactive disk for conversion\n"
+                                   f"• Or boot from a live USB/CD to convert this disk safely")
+                
+                # Clear the selection
+                self.source_var.set("")
+                log_warning(f"User attempted to select active system disk: {device_path}")
+                self.status_var.set("Active disk selection denied")
+                self.operation_details.config(text="❌ Cannot select active system disk", foreground="red")
+                
+                # Clear space info
+                self.space_info_text.config(state=tk.NORMAL)
+                self.space_info_text.delete(1.0, tk.END)
+                self.space_info_text.insert(tk.END, "Please select a non-active disk for P2V conversion.")
+                self.space_info_text.config(state=tk.DISABLED)
+                return
+            
             log_info(f"Selected source disk: {device_path}")
             
             # Auto-update VM name based on disk
             disk_name = device_path.split('/')[-1]  # e.g., sda from /dev/sda
             self.vm_name.set(f"{disk_name}_vm")
+            
+            # Clear any previous error messages
+            self.operation_details.config(text="", foreground="gray")
+            
+            # Update space info if we have detailed disk information
+            disk_info = self.get_selected_disk_info()
+            if disk_info and self.output_path.get():
+                self.root.after(100, self.check_space_requirements)
     
     def validate_vm_name_input(self, event=None):
         """Validate VM name as user types"""
@@ -424,6 +487,10 @@ class P2VConverterGUI:
         if selected_dir:
             self.output_path.set(selected_dir)
             log_info(f"Output directory selected: {selected_dir}")
+            
+            # Auto-check space if disk is selected
+            if self.source_var.get():
+                self.root.after(100, self.check_space_requirements)
     
     def check_space_requirements(self):
         """Check space requirements and display information"""
@@ -439,38 +506,46 @@ class P2VConverterGUI:
                 messagebox.showwarning("Warning", "Please specify an output directory")
                 return
             
-            # Extract device path and get disk info
+            # Extract device path
             device_path = source.split(' ')[0].replace('🟡 ', '')
             
             log_info(f"Checking space requirements for {device_path}")
             
-            # Get disk size
-            try:
-                result = subprocess.run(['blockdev', '--getsize64', device_path], 
-                                      capture_output=True, text=True, check=True)
-                disk_size = int(result.stdout.strip())
-            except Exception as e:
-                raise Exception(f"Could not determine disk size: {str(e)}")
+            # Get disk info using the improved function
+            disk_info = get_disk_info(device_path)
+            disk_size = disk_info.get('size_bytes', 0)
             
-            # Check space
+            if disk_size == 0:
+                raise Exception("Could not determine disk size")
+            
+            # Check space using improved function
             has_space, space_message = check_output_space(output_dir, disk_size)
             
-            # Update space info display
+            # Update space info display with enhanced information
             self.space_info_text.config(state=tk.NORMAL)
             self.space_info_text.delete(1.0, tk.END)
             
             info_text = f"Source Disk: {device_path}\n"
-            info_text += f"Source Size: {format_bytes(disk_size)}\n"
+            info_text += f"Model: {disk_info.get('model', 'Unknown')}\n"
+            if disk_info.get('label') and disk_info['label'] != "Unknown":
+                info_text += f"Label: {disk_info['label']}\n"
+            info_text += f"Source Size: {disk_info.get('size_human', 'Unknown')}\n"
             info_text += f"Output Directory: {output_dir}\n\n"
             info_text += space_message
+            
+            # Add system disk warning if applicable
+            if is_system_disk(device_path):
+                info_text += "\n\n⚠️ WARNING: This is an active system disk!"
             
             self.space_info_text.insert(tk.END, info_text)
             self.space_info_text.config(state=tk.DISABLED)
             
             if has_space:
                 log_info("Space check passed - sufficient space available")
+                self.operation_details.config(text="✅ Sufficient space available", foreground="green")
             else:
                 log_error("Space check failed - insufficient space")
+                self.operation_details.config(text="❌ Insufficient space", foreground="red")
                 messagebox.showwarning("Insufficient Space", 
                                      f"⚠️ Not enough space available!\n\n{space_message}")
             
@@ -478,6 +553,7 @@ class P2VConverterGUI:
             error_msg = f"Error checking space requirements: {str(e)}"
             log_error(error_msg)
             messagebox.showerror("Error", error_msg)
+            self.operation_details.config(text="❌ Space check failed", foreground="red")
     
     def start_conversion(self):
         """Start the P2V conversion operation"""
@@ -507,29 +583,44 @@ class P2VConverterGUI:
         # Extract device path
         device_path = source.split(' ')[0].replace('🟡 ', '')
         
-        # Check if converting system disk
-        if "SYSTEM DISK" in source:
-            result = messagebox.askyesno("System Disk Warning", 
-                                       f"⚠️ WARNING ⚠️\n\n"
-                                       f"You are about to convert the system disk:\n"
-                                       f"{device_path}\n\n"
-                                       f"This operation will:\n"
-                                       f"• Read all data from the active system disk\n"
-                                       f"• May affect system performance during conversion\n"
-                                       f"• Create a complete copy as a virtual machine\n\n"
-                                       f"Are you sure you want to continue?")
-            if not result:
-                return
+        # Double-check that this is not an active disk (safety check)
+        if is_system_disk(device_path) or "SYSTEM DISK" in source:
+            messagebox.showerror("Active Disk Detected", 
+                               f"🚫 Conversion Blocked\n\n"
+                               f"The selected disk ({device_path}) is an active system disk.\n\n"
+                               f"This disk cannot be converted while it's in use.\n"
+                               f"Please select a different disk or boot from a live system.")
+            return
         
-        # Final confirmation
-        if not messagebox.askyesno("Confirm P2V Conversion", 
-                                  f"🖥️ P2V Conversion Confirmation\n\n"
-                                  f"Source Disk: {device_path}\n"
-                                  f"VM Name: {vm_name}\n"
-                                  f"Output Directory: {output_dir}\n\n"
-                                  f"This will create a compressed qcow2 virtual machine.\n"
-                                  f"The process may take a significant amount of time.\n\n"
-                                  f"Continue with the conversion?"):
+        # Space check before starting
+        try:
+            disk_info = get_disk_info(device_path)
+            disk_size = disk_info.get('size_bytes', 0)
+            if disk_size > 0:
+                has_space, space_message = check_output_space(output_dir, disk_size)
+                if not has_space:
+                    if not messagebox.askyesno("Insufficient Space Warning",
+                                             f"⚠️ Space Warning ⚠️\n\n{space_message}\n\n"
+                                             f"Continue anyway? The conversion may fail."):
+                        return
+        except Exception as e:
+            log_warning(f"Could not check space before conversion: {str(e)}")
+        
+        # Final confirmation with enhanced information
+        disk_info = get_disk_info(device_path)
+        confirmation_text = f"🖥️ P2V Conversion Confirmation\n\n"
+        confirmation_text += f"Source Disk: {device_path}\n"
+        confirmation_text += f"Model: {disk_info.get('model', 'Unknown')}\n"
+        confirmation_text += f"Size: {disk_info.get('size_human', 'Unknown')}\n"
+        if disk_info.get('label') and disk_info['label'] != "Unknown":
+            confirmation_text += f"Label: {disk_info['label']}\n"
+        confirmation_text += f"VM Name: {vm_name}\n"
+        confirmation_text += f"Output Directory: {output_dir}\n\n"
+        confirmation_text += f"This will create a compressed qcow2 virtual machine.\n"
+        confirmation_text += f"The process may take a significant amount of time.\n\n"
+        confirmation_text += f"Continue with the conversion?"
+        
+        if not messagebox.askyesno("Confirm P2V Conversion", confirmation_text):
             return
         
         # Start conversion in a separate thread
@@ -546,6 +637,7 @@ class P2VConverterGUI:
         self.stop_btn.config(state=tk.NORMAL)
         self.refresh_btn.config(state=tk.DISABLED)
         self.check_space_btn.config(state=tk.DISABLED)
+        self.source_combo.config(state=tk.DISABLED)
         self.status_var.set("P2V conversion in progress...")
     
     def _conversion_worker(self, source_device, output_dir, vm_name):
@@ -559,7 +651,7 @@ class P2VConverterGUI:
             def stop_check():
                 return self.stop_requested
             
-            # Perform the conversion
+            # Perform the conversion using the improved function
             output_file = create_vm_from_disk(source_device, output_dir, vm_name, 
                                             progress_callback, stop_check)
             
@@ -570,13 +662,18 @@ class P2VConverterGUI:
                 final_size = os.path.getsize(output_file)
                 log_info(f"VM created: {output_file} ({format_bytes(final_size)})")
                 
-                # Show completion dialog
-                self.root.after(0, lambda: messagebox.showinfo("Conversion Complete", 
-                    f"✅ P2V conversion completed successfully!\n\n"
-                    f"VM File: {output_file}\n"
-                    f"Size: {format_bytes(final_size)}\n\n"
-                    f"You can now use this qcow2 file with QEMU/KVM or other\n"
-                    f"virtualization platforms that support qcow2 format."))
+                # Show completion dialog with enhanced information
+                completion_text = f"✅ P2V conversion completed successfully!\n\n"
+                completion_text += f"VM File: {output_file}\n"
+                completion_text += f"Size: {format_bytes(final_size)}\n\n"
+                completion_text += f"You can now use this qcow2 file with:\n"
+                completion_text += f"• QEMU/KVM virtualization\n"
+                completion_text += f"• VirtualBox (with conversion)\n"
+                completion_text += f"• Other virtualization platforms supporting qcow2\n\n"
+                completion_text += f"To boot the VM with QEMU:\n"
+                completion_text += f"qemu-system-x86_64 -hda \"{output_file}\" -m 2048"
+                
+                self.root.after(0, lambda: messagebox.showinfo("Conversion Complete", completion_text))
             
         except KeyboardInterrupt:
             log_warning("P2V conversion cancelled by user")
@@ -603,6 +700,7 @@ class P2VConverterGUI:
         self.stop_btn.config(state=tk.DISABLED)
         self.refresh_btn.config(state=tk.NORMAL)
         self.check_space_btn.config(state=tk.NORMAL)
+        self.source_combo.config(state="readonly")  # Re-enable combobox
         self.progress_var.set(0)
         self.progress_label.config(text="0%")
         self.status_var.set("Ready")
@@ -614,6 +712,7 @@ class P2VConverterGUI:
             self.stop_requested = True
             log_warning("Stop requested by user")
             self.status_var.set("Stopping...")
+            self.operation_details.config(text="Stopping operation, please wait...", foreground="orange")
     
     def exit_application(self):
         """Exit the application with confirmation"""
@@ -633,15 +732,25 @@ class P2VConverterGUI:
         result = messagebox.askyesno("Exit Confirmation", 
                                    "Are you sure you want to exit the P2V Converter?")
         if result:
-            log_application_exit("GUI Exit button")
-            self.root.quit()
-            self.root.destroy()
+            self._perform_exit("GUI Exit button")
     
     def _force_exit(self):
         """Force exit after stopping operation"""
-        log_application_exit("Forced exit during operation")
-        self.root.quit()
-        self.root.destroy()
+        self._perform_exit("Forced exit during operation")
+    
+    def _perform_exit(self, reason):
+        """Perform the actual exit with proper session cleanup"""
+        try:
+            log_application_exit(reason)
+            # Only end session if it's still active
+            if is_session_active():
+                session_end()
+        except Exception as e:
+            # Don't let logging errors prevent exit
+            print(f"Warning: Error during session cleanup: {e}")
+        finally:
+            self.root.quit()
+            self.root.destroy()
     
     def generate_session_pdf(self):
         """Generate PDF from current session logs"""
@@ -655,10 +764,26 @@ class P2VConverterGUI:
             # Generate PDF using the log_handler function
             pdf_path = generate_session_pdf()
             
-            # Show success message
-            messagebox.showinfo("PDF Generated", 
-                               f"📄 Session log PDF generated successfully!\n\n"
-                               f"Location: {pdf_path}")
+            # Show success message with option to open location
+            result = messagebox.askyesnocancel("PDF Generated", 
+                                             f"📄 Session log PDF generated successfully!\n\n"
+                                             f"Location: {pdf_path}\n\n"
+                                             f"Would you like to open the containing folder?")
+            
+            if result:  # Yes - open folder
+                try:
+                    import subprocess
+                    import platform
+                    folder_path = os.path.dirname(pdf_path)
+                    
+                    if platform.system() == "Linux":
+                        subprocess.run(["xdg-open", folder_path])
+                    elif platform.system() == "Darwin":  # macOS
+                        subprocess.run(["open", folder_path])
+                    elif platform.system() == "Windows":
+                        subprocess.run(["explorer", folder_path])
+                except Exception as e:
+                    log_warning(f"Could not open folder: {str(e)}")
             
             log_info(f"Session PDF generated: {pdf_path}")
             
@@ -695,10 +820,26 @@ class P2VConverterGUI:
             # Generate PDF using the log_handler function
             pdf_path = generate_log_file_pdf()
             
-            # Show success message
-            messagebox.showinfo("PDF Generated", 
-                               f"📋 Complete log file PDF generated successfully!\n\n"
-                               f"Location: {pdf_path}")
+            # Show success message with option to open location
+            result = messagebox.askyesnocancel("PDF Generated", 
+                                             f"📋 Complete log file PDF generated successfully!\n\n"
+                                             f"Location: {pdf_path}\n\n"
+                                             f"Would you like to open the containing folder?")
+            
+            if result:  # Yes - open folder
+                try:
+                    import subprocess
+                    import platform
+                    folder_path = os.path.dirname(pdf_path)
+                    
+                    if platform.system() == "Linux":
+                        subprocess.run(["xdg-open", folder_path])
+                    elif platform.system() == "Darwin":  # macOS
+                        subprocess.run(["open", folder_path])
+                    elif platform.system() == "Windows":
+                        subprocess.run(["explorer", folder_path])
+                except Exception as e:
+                    log_warning(f"Could not open folder: {str(e)}")
             
             log_info(f"Complete log PDF generated: {pdf_path}")
             
