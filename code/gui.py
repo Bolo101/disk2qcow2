@@ -71,7 +71,7 @@ class P2VConverterGUI:
         # Set window icon (if available)
         try:
             self.root.iconname("P2V Converter")
-        except:
+        except (tk.TclError, AttributeError):
             pass
     
     def create_widgets(self):
@@ -194,7 +194,7 @@ class P2VConverterGUI:
         control_frame = ttk.Frame(main_frame)
         control_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         
-        self.check_space_btn = ttk.Button(control_frame, text="📏 Check Space Requirements", 
+        self.check_space_btn = ttk.Button(control_frame, text="🔍 Check Space Requirements", 
                                          command=self.check_space_requirements)
         self.check_space_btn.grid(row=0, column=0, padx=(0, 10))
         
@@ -321,7 +321,7 @@ class P2VConverterGUI:
                                 self.log_text.insert(tk.END, f"{timestamp} ", "INFO")
                                 self.log_text.insert(tk.END, f"{level}: {message}\n", level.upper())
                                 
-                            except Exception:
+                            except (IndexError, ValueError, AttributeError):
                                 # Fallback: display as-is
                                 self.log_text.insert(tk.END, f"{log_entry}\n", "INFO")
                         else:
@@ -334,7 +334,7 @@ class P2VConverterGUI:
                     
                     # Update counter
                     self.last_log_count = len(session_logs)
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError, IOError, OSError):
             # Don't let log update errors crash the GUI
             pass
         
@@ -397,10 +397,20 @@ class P2VConverterGUI:
                 self.status_var.set("No disks found")
                 self.source_combo['values'] = []
                 
-        except Exception as e:
-            error_msg = f"Error refreshing disks: {str(e)}"
+        except (OSError, IOError) as e:
+            error_msg = f"System error refreshing disks: {str(e)}"
             log_error(error_msg)
-            messagebox.showerror("Error", error_msg)
+            messagebox.showerror("System Error", error_msg)
+            self.status_var.set("Error refreshing disks")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            error_msg = f"Command execution error refreshing disks: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("Command Error", error_msg)
+            self.status_var.set("Error refreshing disks")
+        except (ValueError, KeyError, AttributeError, TypeError) as e:
+            error_msg = f"Data parsing error refreshing disks: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("Data Error", error_msg)
             self.status_var.set("Error refreshing disks")
     
     def get_selected_disk_info(self):
@@ -516,7 +526,7 @@ class P2VConverterGUI:
             disk_size = disk_info.get('size_bytes', 0)
             
             if disk_size == 0:
-                raise Exception("Could not determine disk size")
+                raise ValueError("Could not determine disk size")
             
             # Check space using improved function
             has_space, space_message = check_output_space(output_dir, disk_size)
@@ -549,10 +559,20 @@ class P2VConverterGUI:
                 messagebox.showwarning("Insufficient Space", 
                                      f"⚠️ Not enough space available!\n\n{space_message}")
             
-        except Exception as e:
-            error_msg = f"Error checking space requirements: {str(e)}"
+        except (OSError, IOError) as e:
+            error_msg = f"System error checking space requirements: {str(e)}"
             log_error(error_msg)
-            messagebox.showerror("Error", error_msg)
+            messagebox.showerror("System Error", error_msg)
+            self.operation_details.config(text="❌ Space check failed", foreground="red")
+        except (ValueError, TypeError) as e:
+            error_msg = f"Data error checking space requirements: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("Data Error", error_msg)
+            self.operation_details.config(text="❌ Space check failed", foreground="red")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            error_msg = f"Command error checking space requirements: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("Command Error", error_msg)
             self.operation_details.config(text="❌ Space check failed", foreground="red")
     
     def start_conversion(self):
@@ -603,22 +623,33 @@ class P2VConverterGUI:
                                              f"⚠️ Space Warning ⚠️\n\n{space_message}\n\n"
                                              f"Continue anyway? The conversion may fail."):
                         return
-        except Exception as e:
-            log_warning(f"Could not check space before conversion: {str(e)}")
+        except (OSError, IOError) as e:
+            log_warning(f"System error checking space before conversion: {str(e)}")
+        except (ValueError, TypeError, KeyError) as e:
+            log_warning(f"Data error checking space before conversion: {str(e)}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_warning(f"Command error checking space before conversion: {str(e)}")
         
         # Final confirmation with enhanced information
-        disk_info = get_disk_info(device_path)
-        confirmation_text = f"🖥️ P2V Conversion Confirmation\n\n"
-        confirmation_text += f"Source Disk: {device_path}\n"
-        confirmation_text += f"Model: {disk_info.get('model', 'Unknown')}\n"
-        confirmation_text += f"Size: {disk_info.get('size_human', 'Unknown')}\n"
-        if disk_info.get('label') and disk_info['label'] != "Unknown":
-            confirmation_text += f"Label: {disk_info['label']}\n"
-        confirmation_text += f"VM Name: {vm_name}\n"
-        confirmation_text += f"Output Directory: {output_dir}\n\n"
-        confirmation_text += f"This will create a compressed qcow2 virtual machine.\n"
-        confirmation_text += f"The process may take a significant amount of time.\n\n"
-        confirmation_text += f"Continue with the conversion?"
+        try:
+            disk_info = get_disk_info(device_path)
+            confirmation_text = f"🖥️ P2V Conversion Confirmation\n\n"
+            confirmation_text += f"Source Disk: {device_path}\n"
+            confirmation_text += f"Model: {disk_info.get('model', 'Unknown')}\n"
+            confirmation_text += f"Size: {disk_info.get('size_human', 'Unknown')}\n"
+            if disk_info.get('label') and disk_info['label'] != "Unknown":
+                confirmation_text += f"Label: {disk_info['label']}\n"
+            confirmation_text += f"VM Name: {vm_name}\n"
+            confirmation_text += f"Output Directory: {output_dir}\n\n"
+            confirmation_text += f"This will create a compressed qcow2 virtual machine.\n"
+            confirmation_text += f"The process may take a significant amount of time.\n\n"
+            confirmation_text += f"Continue with the conversion?"
+        except (OSError, IOError, ValueError, KeyError, AttributeError):
+            confirmation_text = f"🖥️ P2V Conversion Confirmation\n\n"
+            confirmation_text += f"Source Disk: {device_path}\n"
+            confirmation_text += f"VM Name: {vm_name}\n"
+            confirmation_text += f"Output Directory: {output_dir}\n\n"
+            confirmation_text += f"Continue with the conversion?"
         
         if not messagebox.askyesno("Confirm P2V Conversion", confirmation_text):
             return
@@ -677,8 +708,23 @@ class P2VConverterGUI:
             
         except KeyboardInterrupt:
             log_warning("P2V conversion cancelled by user")
-        except Exception as e:
-            error_msg = f"P2V conversion failed: {str(e)}"
+        except (OSError, IOError) as e:
+            error_msg = f"System error during P2V conversion: {str(e)}"
+            log_error(error_msg)
+            self.root.after(0, lambda: messagebox.showerror("Conversion Failed", 
+                f"❌ P2V conversion failed:\n\n{error_msg}"))
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            error_msg = f"Command execution error during P2V conversion: {str(e)}"
+            log_error(error_msg)
+            self.root.after(0, lambda: messagebox.showerror("Conversion Failed", 
+                f"❌ P2V conversion failed:\n\n{error_msg}"))
+        except (ValueError, TypeError, AttributeError) as e:
+            error_msg = f"Data processing error during P2V conversion: {str(e)}"
+            log_error(error_msg)
+            self.root.after(0, lambda: messagebox.showerror("Conversion Failed", 
+                f"❌ P2V conversion failed:\n\n{error_msg}"))
+        except PermissionError as e:
+            error_msg = f"Permission denied during P2V conversion: {str(e)}"
             log_error(error_msg)
             self.root.after(0, lambda: messagebox.showerror("Conversion Failed", 
                 f"❌ P2V conversion failed:\n\n{error_msg}"))
@@ -745,9 +791,9 @@ class P2VConverterGUI:
             # Only end session if it's still active
             if is_session_active():
                 session_end()
-        except Exception as e:
+        except (AttributeError, IOError, OSError, KeyError, ValueError):
             # Don't let logging errors prevent exit
-            print(f"Warning: Error during session cleanup: {e}")
+            print(f"Warning: Error during session cleanup")
         finally:
             self.root.quit()
             self.root.destroy()
@@ -782,7 +828,7 @@ class P2VConverterGUI:
                         subprocess.run(["open", folder_path])
                     elif platform.system() == "Windows":
                         subprocess.run(["explorer", folder_path])
-                except Exception as e:
+                except (OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
                     log_warning(f"Could not open folder: {str(e)}")
             
             log_info(f"Session PDF generated: {pdf_path}")
@@ -797,7 +843,12 @@ class P2VConverterGUI:
             log_error(error_msg)
             messagebox.showerror("PDF Generation Error", 
                                f"❌ Failed to generate PDF:\n\n{error_msg}")
-        except Exception as e:
+        except ImportError as e:
+            error_msg = f"Missing required module for PDF generation: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("PDF Generation Error", 
+                               f"❌ Missing dependency:\n\n{error_msg}")
+        except (AttributeError, TypeError, KeyError) as e:
             error_msg = f"Unexpected error generating session PDF: {str(e)}"
             log_error(error_msg)
             messagebox.showerror("PDF Generation Error", 
@@ -838,7 +889,7 @@ class P2VConverterGUI:
                         subprocess.run(["open", folder_path])
                     elif platform.system() == "Windows":
                         subprocess.run(["explorer", folder_path])
-                except Exception as e:
+                except (OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
                     log_warning(f"Could not open folder: {str(e)}")
             
             log_info(f"Complete log PDF generated: {pdf_path}")
@@ -847,12 +898,22 @@ class P2VConverterGUI:
             log_warning(f"Cannot generate log file PDF: {str(e)}")
             messagebox.showwarning("Log File Not Found", 
                                  f"⚠️ Cannot generate PDF:\n\n{str(e)}")
-        except (PermissionError, UnicodeDecodeError, OSError, IOError) as e:
+        except (PermissionError, OSError, IOError) as e:
             error_msg = f"Failed to generate log file PDF: {str(e)}"
             log_error(error_msg)
             messagebox.showerror("PDF Generation Error", 
                                f"❌ Failed to generate PDF:\n\n{error_msg}")
-        except Exception as e:
+        except UnicodeDecodeError as e:
+            error_msg = f"Text encoding error in log file: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("PDF Generation Error", 
+                               f"❌ Text encoding error:\n\n{error_msg}")
+        except ImportError as e:
+            error_msg = f"Missing required module for PDF generation: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("PDF Generation Error", 
+                               f"❌ Missing dependency:\n\n{error_msg}")
+        except (AttributeError, TypeError, KeyError, ValueError) as e:
             error_msg = f"Unexpected error generating log file PDF: {str(e)}"
             log_error(error_msg)
             messagebox.showerror("PDF Generation Error", 
@@ -879,8 +940,8 @@ def setup_gui_styling():
         try:
             style.configure("Accent.TButton", 
                           font=("Arial", 9, "bold"))
-        except:
+        except (tk.TclError, AttributeError):
             pass
-    except:
+    except (tk.TclError, AttributeError, ImportError):
         # Continue with default theme if styling fails
         pass
