@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+P2V Converter GUI Module
+Provides the graphical user interface for the Physical to Virtual converter
+"""
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -6,7 +10,10 @@ import os
 import subprocess
 import threading
 import time
-from log_handler import log_info, log_error, log_warning, generate_session_pdf, generate_log_file_pdf
+from log_handler import (log_info, log_error, log_warning, generate_session_pdf, 
+                        generate_log_file_pdf, session_start, session_end, 
+                        log_application_exit, get_current_session_logs, 
+                        is_session_active)
 from utils import (get_disk_list, get_directory_space, check_output_space, check_qemu_tools, 
                    create_vm_from_disk, validate_vm_name, format_bytes, get_active_disk)
 
@@ -18,8 +25,8 @@ class P2VConverterGUI:
         self.root.title("Physical to Virtual (P2V) Converter")
         self.root.geometry("1000x800")
         
-        # Session logs for this execution
-        self.session_logs = []
+        # Set up GUI styling first
+        setup_gui_styling()
         
         # Operation control variables
         self.operation_running = False
@@ -38,12 +45,15 @@ class P2VConverterGUI:
         # Set up window close protocol
         self.root.protocol("WM_DELETE_WINDOW", self.exit_application)
         
-        # Log the GUI initialization
-        self.add_session_log("P2V Converter GUI initialized successfully")
+        # Start logging session and log GUI initialization
+        session_start()
         log_info("P2V Converter GUI initialized successfully")
         
         # Check for required tools
         self.check_prerequisites()
+        
+        # Start periodic log update
+        self.update_log_from_session()
     
     def setup_window(self):
         """Configure the main window properties"""
@@ -90,16 +100,16 @@ class P2VConverterGUI:
         
         # Print session log button
         self.session_pdf_btn = ttk.Button(button_frame, 
-                                         text="📄 Print Log Session",
+                                         text="📄 Print Session Log",
                                          command=self.generate_session_pdf,
-                                         width=18)
+                                         width=20)
         self.session_pdf_btn.grid(row=0, column=0, padx=(0, 5))
         
         # Print complete log file button
         self.file_pdf_btn = ttk.Button(button_frame, 
-                                      text="📋 Print Log File",
+                                      text="📋 Print Complete Log",
                                       command=self.generate_log_file_pdf,
-                                      width=18)
+                                      width=20)
         self.file_pdf_btn.grid(row=0, column=1, padx=(0, 5))
         
         # Exit button
@@ -111,7 +121,7 @@ class P2VConverterGUI:
         
         # Add separator
         separator = ttk.Separator(self.root, orient='horizontal')
-        separator.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        separator.grid(row=0, column=0, sticky="ew", pady=(0, 5), columnspan=1)
     
     def create_main_frame(self):
         """Create the main content frame"""
@@ -192,8 +202,8 @@ class P2VConverterGUI:
                                   command=self.stop_operation, state=tk.DISABLED)
         self.stop_btn.grid(row=0, column=2, padx=(0, 10))
         
-        self.clear_log_btn = ttk.Button(control_frame, text="🗑️ Clear Log", 
-                                       command=self.clear_log)
+        self.clear_log_btn = ttk.Button(control_frame, text="🗑️ Clear Display", 
+                                       command=self.clear_log_display)
         self.clear_log_btn.grid(row=0, column=3)
         
         # Progress and log area
@@ -224,6 +234,9 @@ class P2VConverterGUI:
         self.log_text.tag_configure("WARNING", foreground="#ff6600")
         self.log_text.tag_configure("ERROR", foreground="#cc0000")
         self.log_text.tag_configure("SUCCESS", foreground="#009900")
+        
+        # Track last displayed log count
+        self.last_log_count = 0
     
     def create_status_frame(self):
         """Create the status frame at the bottom"""
@@ -265,56 +278,78 @@ class P2VConverterGUI:
         """Check if required tools are available"""
         tools_available, message = check_qemu_tools()
         if not tools_available:
-            self.add_session_log(f"Prerequisites check failed: {message}", "ERROR")
+            log_error(f"Prerequisites check failed: {message}")
             messagebox.showerror("Missing Prerequisites", 
                                f"❌ Required tools are missing:\n\n{message}\n\n"
                                f"Please install the required packages:\n"
                                f"• qemu-utils (for qemu-img)\n"
                                f"• coreutils (for dd)")
         else:
-            self.add_session_log("All prerequisites are available", "SUCCESS")
+            log_info("All prerequisites are available")
     
-    def add_session_log(self, message, level="INFO"):
-        """Add a message to the session logs list"""
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        formatted_message = f"{timestamp} - {level} - {message}"
-        self.session_logs.append(formatted_message)
+    def update_log_from_session(self):
+        """Update log display from session logs"""
+        try:
+            if is_session_active():
+                session_logs = get_current_session_logs()
+                
+                # Only update if there are new logs
+                if len(session_logs) > self.last_log_count:
+                    new_logs = session_logs[self.last_log_count:]
+                    
+                    self.log_text.config(state=tk.NORMAL)
+                    
+                    for log_entry in new_logs:
+                        # Parse log entry to extract level and message
+                        # Format: [TIMESTAMP] LEVEL: MESSAGE
+                        if "] " in log_entry and ": " in log_entry:
+                            try:
+                                # Extract timestamp, level, and message
+                                parts = log_entry.split("] ", 1)
+                                timestamp = parts[0] + "]"
+                                rest = parts[1]
+                                
+                                level_parts = rest.split(": ", 1)
+                                level = level_parts[0]
+                                message = level_parts[1] if len(level_parts) > 1 else rest
+                                
+                                # Insert with appropriate formatting
+                                self.log_text.insert(tk.END, f"{timestamp} ", "INFO")
+                                self.log_text.insert(tk.END, f"{level}: {message}\n", level.upper())
+                                
+                            except Exception:
+                                # Fallback: display as-is
+                                self.log_text.insert(tk.END, f"{log_entry}\n", "INFO")
+                        else:
+                            # Display as-is if format doesn't match expected pattern
+                            self.log_text.insert(tk.END, f"{log_entry}\n", "INFO")
+                    
+                    # Auto-scroll to bottom
+                    self.log_text.see(tk.END)
+                    self.log_text.config(state=tk.DISABLED)
+                    
+                    # Update counter
+                    self.last_log_count = len(session_logs)
+        except Exception as e:
+            # Don't let log update errors crash the GUI
+            pass
         
-        # Also display in the GUI log
-        self.update_log_display(f"[{level}] {message}", level)
+        # Schedule next update
+        self.root.after(1000, self.update_log_from_session)
     
-    def update_log_display(self, message, level="INFO"):
-        """Update the log display in the GUI"""
-        self.log_text.config(state=tk.NORMAL)
-        
-        # Insert timestamp
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        
-        # Insert message with appropriate tag
-        self.log_text.insert(tk.END, f"{timestamp} ", "INFO")
-        self.log_text.insert(tk.END, f"{message}\n", level)
-        
-        # Auto-scroll to bottom
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
-        
-        # Update GUI
-        self.root.update_idletasks()
-    
-    def clear_log(self):
-        """Clear the log display"""
+    def clear_log_display(self):
+        """Clear the log display (but not the actual session logs)"""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
         
-        self.add_session_log("Log display cleared")
+        log_info("Log display cleared (session logs preserved)")
+        # Reset counter so logs will reappear on next update
+        self.last_log_count = 0
     
     def refresh_disks(self):
         """Refresh the list of available disks"""
         try:
-            self.add_session_log("Refreshing disk list...")
             log_info("Refreshing disk list")
             
             # Get list of disks
@@ -345,16 +380,15 @@ class P2VConverterGUI:
                                 break
                     self.source_combo['values'] = disk_options
                 
-                self.add_session_log(f"Found {len(disks)} disk(s)", "SUCCESS")
+                log_info(f"Found {len(disks)} disk(s)")
                 self.status_var.set(f"Found {len(disks)} disk(s)")
                 
             else:
-                self.add_session_log("No disks found", "WARNING")
+                log_warning("No disks found")
                 self.status_var.set("No disks found")
                 
         except Exception as e:
             error_msg = f"Error refreshing disks: {str(e)}"
-            self.add_session_log(error_msg, "ERROR")
             log_error(error_msg)
             messagebox.showerror("Error", error_msg)
     
@@ -364,7 +398,7 @@ class P2VConverterGUI:
         if selected:
             # Extract device path
             device_path = selected.split(' ')[0].replace('🟡 ', '')
-            self.add_session_log(f"Selected source disk: {device_path}")
+            log_info(f"Selected source disk: {device_path}")
             
             # Auto-update VM name based on disk
             disk_name = device_path.split('/')[-1]  # e.g., sda from /dev/sda
@@ -389,7 +423,7 @@ class P2VConverterGUI:
         
         if selected_dir:
             self.output_path.set(selected_dir)
-            self.add_session_log(f"Output directory selected: {selected_dir}")
+            log_info(f"Output directory selected: {selected_dir}")
     
     def check_space_requirements(self):
         """Check space requirements and display information"""
@@ -407,6 +441,8 @@ class P2VConverterGUI:
             
             # Extract device path and get disk info
             device_path = source.split(' ')[0].replace('🟡 ', '')
+            
+            log_info(f"Checking space requirements for {device_path}")
             
             # Get disk size
             try:
@@ -432,15 +468,15 @@ class P2VConverterGUI:
             self.space_info_text.config(state=tk.DISABLED)
             
             if has_space:
-                self.add_session_log("Space check passed - sufficient space available", "SUCCESS")
+                log_info("Space check passed - sufficient space available")
             else:
-                self.add_session_log("Space check failed - insufficient space", "ERROR")
+                log_error("Space check failed - insufficient space")
                 messagebox.showwarning("Insufficient Space", 
                                      f"⚠️ Not enough space available!\n\n{space_message}")
             
         except Exception as e:
             error_msg = f"Error checking space requirements: {str(e)}"
-            self.add_session_log(error_msg, "ERROR")
+            log_error(error_msg)
             messagebox.showerror("Error", error_msg)
     
     def start_conversion(self):
@@ -515,8 +551,7 @@ class P2VConverterGUI:
     def _conversion_worker(self, source_device, output_dir, vm_name):
         """Worker thread for P2V conversion operation"""
         try:
-            self.add_session_log(f"Starting P2V conversion: {source_device} -> {vm_name}.qcow2")
-            log_info(f"P2V conversion started: {source_device} -> {vm_name}")
+            log_info(f"Starting P2V conversion: {source_device} -> {vm_name}.qcow2")
             
             def progress_callback(percent, status):
                 self.root.after(0, lambda: self._update_progress(percent, status))
@@ -529,12 +564,11 @@ class P2VConverterGUI:
                                             progress_callback, stop_check)
             
             if not self.stop_requested:
-                self.add_session_log("P2V conversion completed successfully", "SUCCESS")
                 log_info("P2V conversion completed successfully")
                 
                 # Get final file size
                 final_size = os.path.getsize(output_file)
-                self.add_session_log(f"VM created: {output_file} ({format_bytes(final_size)})", "SUCCESS")
+                log_info(f"VM created: {output_file} ({format_bytes(final_size)})")
                 
                 # Show completion dialog
                 self.root.after(0, lambda: messagebox.showinfo("Conversion Complete", 
@@ -545,11 +579,9 @@ class P2VConverterGUI:
                     f"virtualization platforms that support qcow2 format."))
             
         except KeyboardInterrupt:
-            self.add_session_log("P2V conversion cancelled by user", "WARNING")
             log_warning("P2V conversion cancelled by user")
         except Exception as e:
             error_msg = f"P2V conversion failed: {str(e)}"
-            self.add_session_log(error_msg, "ERROR")
             log_error(error_msg)
             self.root.after(0, lambda: messagebox.showerror("Conversion Failed", 
                 f"❌ P2V conversion failed:\n\n{error_msg}"))
@@ -580,7 +612,6 @@ class P2VConverterGUI:
         """Stop the current operation"""
         if self.operation_running:
             self.stop_requested = True
-            self.add_session_log("Stop requested by user", "WARNING")
             log_warning("Stop requested by user")
             self.status_var.set("Stopping...")
     
@@ -593,7 +624,6 @@ class P2VConverterGUI:
                                        "This will stop the current operation.")
             if result:
                 self.stop_requested = True
-                self.add_session_log("Application exit requested during operation", "WARNING")
                 log_warning("Application exit requested during operation")
                 # Give a moment for the operation to stop
                 self.root.after(1000, self._force_exit)
@@ -601,43 +631,52 @@ class P2VConverterGUI:
         
         # Normal exit confirmation
         result = messagebox.askyesno("Exit Confirmation", 
-                                   "Are you sure you want to exit the Disk Cloner?")
+                                   "Are you sure you want to exit the P2V Converter?")
         if result:
-            self.add_session_log("Application exit requested by user")
-            log_info("Disk Cloner application terminated by user")
+            log_application_exit("GUI Exit button")
             self.root.quit()
             self.root.destroy()
     
     def _force_exit(self):
         """Force exit after stopping operation"""
+        log_application_exit("Forced exit during operation")
         self.root.quit()
         self.root.destroy()
     
     def generate_session_pdf(self):
         """Generate PDF from current session logs"""
         try:
-            self.add_session_log("Generating session log PDF...")
+            log_info("Generating session log PDF...")
             
             # Disable button during generation
             self.session_pdf_btn.config(state=tk.DISABLED)
             self.status_var.set("Generating PDF...")
             
-            # Generate PDF
-            pdf_path = generate_session_pdf(self.session_logs)
+            # Generate PDF using the log_handler function
+            pdf_path = generate_session_pdf()
             
-            # Show success message without option to open
+            # Show success message
             messagebox.showinfo("PDF Generated", 
                                f"📄 Session log PDF generated successfully!\n\n"
                                f"Location: {pdf_path}")
             
-            self.add_session_log(f"Session PDF generated: {pdf_path}", "SUCCESS")
+            log_info(f"Session PDF generated: {pdf_path}")
             
-        except Exception as e:
+        except ValueError as e:
+            # Handle case where no session logs are available
+            log_warning(f"Cannot generate session PDF: {str(e)}")
+            messagebox.showwarning("No Session Data", 
+                                 f"⚠️ Cannot generate session PDF:\n\n{str(e)}")
+        except (PermissionError, OSError, IOError) as e:
             error_msg = f"Failed to generate session PDF: {str(e)}"
-            self.add_session_log(error_msg, "ERROR")
             log_error(error_msg)
             messagebox.showerror("PDF Generation Error", 
                                f"❌ Failed to generate PDF:\n\n{error_msg}")
+        except Exception as e:
+            error_msg = f"Unexpected error generating session PDF: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("PDF Generation Error", 
+                               f"❌ Unexpected error:\n\n{error_msg}")
         
         finally:
             # Re-enable button and reset status
@@ -647,30 +686,60 @@ class P2VConverterGUI:
     def generate_log_file_pdf(self):
         """Generate PDF from complete log file"""
         try:
-            self.add_session_log("Generating complete log file PDF...")
+            log_info("Generating complete log file PDF...")
             
             # Disable button during generation
             self.file_pdf_btn.config(state=tk.DISABLED)
             self.status_var.set("Generating PDF...")
             
-            # Generate PDF
+            # Generate PDF using the log_handler function
             pdf_path = generate_log_file_pdf()
             
-            # Show success message without option to open
+            # Show success message
             messagebox.showinfo("PDF Generated", 
                                f"📋 Complete log file PDF generated successfully!\n\n"
                                f"Location: {pdf_path}")
             
-            self.add_session_log(f"Complete log PDF generated: {pdf_path}", "SUCCESS")
+            log_info(f"Complete log PDF generated: {pdf_path}")
             
-        except Exception as e:
+        except FileNotFoundError as e:
+            log_warning(f"Cannot generate log file PDF: {str(e)}")
+            messagebox.showwarning("Log File Not Found", 
+                                 f"⚠️ Cannot generate PDF:\n\n{str(e)}")
+        except (PermissionError, UnicodeDecodeError, OSError, IOError) as e:
             error_msg = f"Failed to generate log file PDF: {str(e)}"
-            self.add_session_log(error_msg, "ERROR")
             log_error(error_msg)
             messagebox.showerror("PDF Generation Error", 
                                f"❌ Failed to generate PDF:\n\n{error_msg}")
+        except Exception as e:
+            error_msg = f"Unexpected error generating log file PDF: {str(e)}"
+            log_error(error_msg)
+            messagebox.showerror("PDF Generation Error", 
+                               f"❌ Unexpected error:\n\n{error_msg}")
         
         finally:
             # Re-enable button and reset status
             self.file_pdf_btn.config(state=tk.NORMAL)
             self.status_var.set("Ready")
+
+
+def setup_gui_styling():
+    """Set up GUI styling and themes"""
+    try:
+        style = ttk.Style()
+        # Try to use a modern theme if available
+        available_themes = style.theme_names()
+        if 'clam' in available_themes:
+            style.theme_use('clam')
+        elif 'alt' in available_themes:
+            style.theme_use('alt')
+        
+        # Configure accent button style if theme supports it
+        try:
+            style.configure("Accent.TButton", 
+                          font=("Arial", 9, "bold"))
+        except:
+            pass
+    except:
+        # Continue with default theme if styling fails
+        pass
