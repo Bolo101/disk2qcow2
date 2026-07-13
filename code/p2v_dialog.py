@@ -56,9 +56,6 @@ class P2VConverterGUI:
         # Create the GUI elements
         self.create_widgets()
 
-        # Set up window close protocol
-        self.root.protocol("WM_DELETE_WINDOW", self.exit_application)
-
         # Start logging session and log GUI initialization
         session_start()
         log_info("P2V Converter GUI initialized successfully")
@@ -206,10 +203,6 @@ class P2VConverterGUI:
                                        command=self.generate_log_file_pdf,
                                        width=btn_width)
         self.file_pdf_btn.pack(side="left", padx=(0, 4))
-
-        self.exit_btn = ttk.Button(btn_bar, text="Quitter",
-                                   command=self.exit_application, width=10)
-        self.exit_btn.pack(side="left", padx=(0, 4))
 
         self.poweroff_btn = ttk.Button(btn_bar, text="Éteindre",
                                        command=self.power_off_system,
@@ -1160,23 +1153,6 @@ class P2VConverterGUI:
             self.status_var.set("Arrêt...")
             self.operation_details.config(text="Arrêt en cours, veuillez patienter...",
                                            fg=theme.WARNING)
-
-    def exit_application(self):
-        if self.operation_running:
-            result = messagebox.askyesno("Confirmation de fermeture",
-                                         "Une opération est en cours.\n\n"
-                                         "Êtes-vous sûr de vouloir quitter ?\n"
-                                         "Cela arrêtera l'opération en cours.")
-            if result:
-                self.stop_requested = True
-                log_warning("Application exit requested during operation")
-                self.root.after(1000, self._force_exit)
-            return
-
-        result = messagebox.askyesno("Confirmation de fermeture",
-                                     "Êtes-vous sûr de vouloir quitter le convertisseur P2V ?")
-        if result:
-            self._perform_exit("GUI Exit button")
 
     def _force_exit(self):
         self._perform_exit("Forced exit during operation")
