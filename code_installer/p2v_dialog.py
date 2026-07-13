@@ -6,7 +6,7 @@ with support for mounting unmounted disks for output storage and resizing QCOW2 
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 import theme
 import os
 import subprocess
@@ -231,10 +231,32 @@ class P2VConverterGUI:
                                     command=lambda: open_admin_panel(self.root),
                                     width=20)
         self.admin_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        # Reboot button – à droite du bouton Administration
+        self.reboot_btn = ttk.Button(button_frame,
+                                     text="⟲  Redémarrer",
+                                     command=self._on_reboot_clicked,
+                                     width=16)
+        self.reboot_btn.grid(row=0, column=1, padx=(0, 5), sticky="ew")
         
         # Add separator
         separator = ttk.Separator(self.root, orient='horizontal')
         separator.grid(row=0, column=0, sticky="ew", pady=(0, 5), columnspan=1)
+
+    def _on_reboot_clicked(self):
+        """Redémarre la machine, avec confirmation et garde-fou si une conversion est en cours."""
+        if self.operation_running:
+            messagebox.showwarning(
+                "Conversion en cours",
+                "Impossible de redémarrer pendant une conversion P2V. "
+                "Attendez la fin de l'opération, puis réessayez.",
+                parent=self.root,
+            )
+            return
+        if not messagebox.askyesno("Redémarrer", "Redémarrer la machine maintenant ?", parent=self.root):
+            return
+        log_info("Redémarrage système demandé via le bouton Redémarrer.")
+        subprocess.run(["systemctl", "reboot"], check=False)
     
     def create_main_frame(self):
         """Create the main content frame with responsive layout"""
