@@ -147,6 +147,29 @@ def get_all_log_files() -> List[str]:
     files.extend(rotated)
     return files
 
+def purge_logs() -> None:
+    """Supprime tous les fichiers de log (courant + tournés). Réservé à l'admin."""
+    for f in get_all_log_files():
+        try:
+            os.remove(f)
+        except OSError as e:
+            logger.error(f"Impossible de supprimer {f} : {e}")
+
+    global log_handler
+    try:
+        logger.removeHandler(log_handler)
+        log_handler.close()
+    except Exception:
+        pass
+
+    log_handler = logging.FileHandler(log_file)
+    log_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    log_handler.setFormatter(formatter)
+    logger.addHandler(log_handler)
+
+    log_info("Logs purgés par l'administrateur.")
+
 def generate_session_pdf(output_path: str = None) -> str:
     """
     Générer un PDF à partir des logs de la session en cours en utilisant uniquement les bibliothèques intégrées.
