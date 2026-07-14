@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import theme
 import os
+from pathlib import Path
 import subprocess
 import threading
 from log_handler import (log_info, log_error, log_warning,
