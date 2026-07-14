@@ -1,5 +1,6 @@
 import logging
 import sys
+import glob
 import os
 from datetime import datetime
 from typing import List
@@ -136,6 +137,15 @@ def is_session_active() -> bool:
     """Vérifier si une session de journalisation est actuellement active"""
     global _session_active
     return _session_active
+
+def get_all_log_files() -> List[str]:
+    """Retourne la liste de tous les fichiers de log (courant + tournés), triés du plus récent au plus ancien."""
+    files = []
+    if os.path.isfile(log_file):
+        files.append(log_file)
+    rotated = sorted(glob.glob(f"{log_file}.*"), reverse=True)
+    files.extend(rotated)
+    return files
 
 def generate_session_pdf(output_path: str = None) -> str:
     """
