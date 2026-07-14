@@ -2,13 +2,13 @@
 admin_interface.py – Password-protected administration panel for the P2V Converter.
 
 Features:
-  • Conversion counter (total virtualised machines)
-  • PDF export: session report / complete logs → external storage
-  • Raw log export (all rotated files) → external storage
-  • Log purge
-  • Admin password change
-  • Power off / Reboot
-  • Exit to OS
+• Conversion counter (total virtualised machines)
+• PDF export: session report / complete logs → external storage
+• Raw log export (all rotated files) → external storage
+• Log purge
+• Admin password change
+• Power off / Reboot
+• Exit to OS
 """
 
 import json
@@ -22,12 +22,23 @@ import theme
 from datetime import datetime
 from typing import List
 
-from config_manager import (change_password, is_password_set,
-                             set_password, verify_password)
-from log_handler import (generate_log_file_pdf, generate_session_pdf,
-                          get_all_log_files, log_error, log_info,
-                          log_application_exit, purge_logs,
-                          session_end, is_session_active)
+from config_manager import (
+    change_password,
+    is_password_set,
+    set_password,
+    verify_password_with_wait,
+)
+from log_handler import (
+    generate_log_file_pdf,
+    generate_session_pdf,
+    get_all_log_files,
+    is_session_active,
+    log_application_exit,
+    log_error,
+    log_info,
+    purge_logs,
+    session_end,
+)
 from stats_manager import get_conversion_count
 
 
@@ -46,8 +57,11 @@ class PasswordDialog(tk.Toplevel):
 
         self.result: str | None = None
 
-        ttk.Label(self, text="Mot de passe administrateur :",
-                  font=("Arial", 11)).pack(padx=20, pady=(16, 4))
+        ttk.Label(
+            self,
+            text="Mot de passe administrateur :",
+            font=("Arial", 11),
+        ).pack(padx=20, pady=(16, 4))
         self._entry = ttk.Entry(self, show="•", width=28, font=("Arial", 11))
         self._entry.pack(padx=20, pady=4)
         self._entry.bind("<Return>", lambda _: self._ok())
@@ -55,7 +69,7 @@ class PasswordDialog(tk.Toplevel):
 
         btn_frame = ttk.Frame(self)
         btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="OK",      command=self._ok).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_frame, text="OK", command=self._ok).pack(side=tk.LEFT, padx=6)
         ttk.Button(btn_frame, text="Annuler", command=self._cancel).pack(side=tk.LEFT, padx=6)
 
         self._center(parent)
@@ -63,7 +77,7 @@ class PasswordDialog(tk.Toplevel):
 
     def _center(self, parent: tk.Widget) -> None:
         self.update_idletasks()
-        px = parent.winfo_rootx() + (parent.winfo_width()  - self.winfo_width())  // 2
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
         py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{px}+{py}")
 
@@ -88,23 +102,27 @@ def prompt_initial_password(parent: tk.Widget) -> None:
         win.title("Configuration initiale — Mot de passe administrateur")
         win.resizable(False, False)
         win.grab_set()
-        win.protocol("WM_DELETE_WINDOW", lambda: None)   # non-closeable
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
         theme.apply_theme(win)
 
-        ttk.Label(win,
-                  text="Définir le mot de passe administrateur.",
-                  font=("Arial", 11, "bold")).pack(padx=20, pady=(14, 6))
-        ttk.Label(win,
-                  text="Ce mot de passe protège le panneau d'administration\n"
-                       "(export des journaux, arrêt système, etc.)",
-                  justify=tk.LEFT).pack(padx=20)
+        ttk.Label(
+            win,
+            text="Définir le mot de passe administrateur.",
+            font=("Arial", 11, "bold"),
+        ).pack(padx=20, pady=(14, 6))
+        ttk.Label(
+            win,
+            text="Ce mot de passe protège le panneau d'administration\n"
+                 "(export des journaux, arrêt système, etc.)",
+            justify=tk.LEFT,
+        ).pack(padx=20)
 
         fields: dict[str, ttk.Entry] = {}
         for label in ("Mot de passe :", "Confirmation :"):
             ttk.Label(win, text=label).pack(anchor="w", padx=20, pady=(6, 0))
-            e = ttk.Entry(win, show="•", width=28)
-            e.pack(padx=20, pady=2)
-            fields[label] = e
+            entry = ttk.Entry(win, show="•", width=28)
+            entry.pack(padx=20, pady=2)
+            fields[label] = entry
 
         err_var = tk.StringVar()
         ttk.Label(win, textvariable=err_var, foreground="red").pack(pady=2)
@@ -112,16 +130,17 @@ def prompt_initial_password(parent: tk.Widget) -> None:
         submitted: list[bool] = [False]
 
         def on_submit() -> None:
-            pw  = fields["Mot de passe :"].get()
-            pw2 = fields["Confirmation :"].get()
-            if len(pw) < 8:
+            password = fields["Mot de passe :"].get()
+            password_confirm = fields["Confirmation :"].get()
+
+            if len(password) < 8:
                 err_var.set("Le mot de passe doit comporter au moins 8 caractères.")
                 return
-            if pw != pw2:
+            if password != password_confirm:
                 err_var.set("Les mots de passe ne correspondent pas.")
                 return
             try:
-                set_password(pw)
+                set_password(password)
                 submitted[0] = True
                 win.destroy()
             except Exception as exc:
@@ -144,17 +163,16 @@ def _get_external_disks() -> list:
     """
     result = []
     try:
-        raw  = subprocess.run(
+        raw = subprocess.run(
             ["lsblk", "-J", "-o", "NAME,SIZE,TYPE,MODEL,MOUNTPOINT"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         ).stdout.decode()
         data = json.loads(raw)
-    except Exception as e:
-        log_error(f"lsblk JSON failed: {e}")
+    except Exception as exc:
+        log_error(f"lsblk JSON failed: {exc}")
         return result
 
-    # Detect system disk
-    system_disk = ""
     try:
         from utils import is_system_disk as _isd
         _isd_fn = _isd
@@ -172,24 +190,28 @@ def _get_external_disks() -> list:
             continue
 
         partitions: List[str] = []
-        mount_map: dict       = {}
+        mount_map: dict = {}
         for child in (dev.get("children") or []):
             if child.get("type") == "part":
-                pname = child["name"]
-                partitions.append(pname)
-                mount_map[pname] = child.get("mountpoint") or None
+                part_name = child["name"]
+                partitions.append(part_name)
+                mount_map[part_name] = child.get("mountpoint") or None
+
         if not partitions:
             partitions.append(dev_name)
             mount_map[dev_name] = dev.get("mountpoint") or None
 
-        result.append({
-            "device":       dev_name,
-            "path":         f"/dev/{dev_name}",
-            "size":         dev.get("size", "?"),
-            "model":        (dev.get("model") or "").strip(),
-            "partitions":   partitions,
-            "mount_points": mount_map,
-        })
+        result.append(
+            {
+                "device": dev_name,
+                "path": f"/dev/{dev_name}",
+                "size": dev.get("size", "?"),
+                "model": (dev.get("model") or "").strip(),
+                "partitions": partitions,
+                "mount_points": mount_map,
+            }
+        )
+
     return result
 
 
@@ -197,36 +219,43 @@ def _mount_partition(partition: str) -> str | None:
     """Mount /dev/<partition> to a temp dir. Returns mount point or None."""
     mount_dir = tempfile.mkdtemp(prefix="p2v_admin_export_")
     try:
-        r = subprocess.run(
+        result = subprocess.run(
             ["mount", f"/dev/{partition}", mount_dir],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        if r.returncode != 0:
-            log_error(f"mount /dev/{partition} -> {mount_dir} failed: "
-                      f"{r.stderr.decode().strip()}")
+        if result.returncode != 0:
+            log_error(
+                f"mount /dev/{partition} -> {mount_dir} failed: "
+                f"{result.stderr.decode().strip()}"
+            )
             try:
                 os.rmdir(mount_dir)
             except OSError:
                 pass
             return None
+
         log_info(f"Mounted /dev/{partition} at {mount_dir}")
         return mount_dir
-    except Exception as e:
-        log_error(f"Unexpected error mounting /dev/{partition}: {e}")
+    except Exception as exc:
+        log_error(f"Unexpected error mounting /dev/{partition}: {exc}")
         return None
 
 
 def _unmount_partition(mount_dir: str) -> None:
     """Unmount and remove the temp mount directory."""
     try:
-        r = subprocess.run(["umount", mount_dir],
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if r.returncode != 0:
-            log_error(f"umount {mount_dir} failed: {r.stderr.decode().strip()}")
+        result = subprocess.run(
+            ["umount", mount_dir],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0:
+            log_error(f"umount {mount_dir} failed: {result.stderr.decode().strip()}")
         else:
             log_info(f"Unmounted {mount_dir}")
-    except Exception as e:
-        log_error(f"Error during umount {mount_dir}: {e}")
+    except Exception as exc:
+        log_error(f"Error during umount {mount_dir}: {exc}")
     finally:
         try:
             os.rmdir(mount_dir)
@@ -248,21 +277,31 @@ def _show_disk_picker(parent: tk.Widget, external_disks: list):
     dlg.resizable(False, False)
     theme.apply_theme(dlg)
 
-    ttk.Label(dlg,
-              text="Choisissez le support externe pour l'export",
-              font=("Arial", 11, "bold"),
-              padding=(10, 10)).pack(fill=tk.X)
-    ttk.Label(dlg,
-              text="Seuls les disques non-système sont listés.\n"
-                   "Le périphérique sera monté automatiquement si nécessaire.",
-              foreground="#555555",
-              padding=(10, 0, 10, 6)).pack(fill=tk.X)
+    ttk.Label(
+        dlg,
+        text="Choisissez le support externe pour l'export",
+        font=("Arial", 11, "bold"),
+        padding=(10, 10),
+    ).pack(fill=tk.X)
+    ttk.Label(
+        dlg,
+        text="Seuls les disques non-système sont listés.\n"
+             "Le périphérique sera monté automatiquement si nécessaire.",
+        foreground="#555555",
+        padding=(10, 0, 10, 6),
+    ).pack(fill=tk.X)
 
     frame = ttk.Frame(dlg, padding=(10, 0, 10, 6))
     frame.pack(fill=tk.BOTH, expand=True)
 
-    lb = tk.Listbox(frame, width=70, height=12, font=("Courier", 9),
-                    selectmode=tk.SINGLE, activestyle="dotbox")
+    lb = tk.Listbox(
+        frame,
+        width=70,
+        height=12,
+        font=("Courier", 9),
+        selectmode=tk.SINGLE,
+        activestyle="dotbox",
+    )
     sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=lb.yview)
     lb.configure(yscrollcommand=sb.set)
     lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -270,59 +309,78 @@ def _show_disk_picker(parent: tk.Widget, external_disks: list):
 
     entries = []
     for disk in external_disks:
-        model_str = f" [{disk['model']}]" if disk['model'] else ""
-        lb.insert(tk.END, f"── {disk['path']}  {disk['size']}{model_str}")
+        model_str = f" [{disk['model']}]" if disk["model"] else ""
+        lb.insert(tk.END, f"── {disk['path']} {disk['size']}{model_str}")
         lb.itemconfig(tk.END, foreground="#333388", background="#eeeeff")
         entries.append(None)
+
         for part in disk["partitions"]:
-            mp     = disk["mount_points"].get(part)
-            status = f"monté sur {mp}" if mp else "non monté"
-            lb.insert(tk.END, f"     /dev/{part:<14}  {status}")
-            entries.append((part, mp is not None, mp))
+            mount_point = disk["mount_points"].get(part)
+            status = f"monté sur {mount_point}" if mount_point else "non monté"
+            lb.insert(tk.END, f" /dev/{part:<14} {status}")
+            entries.append((part, mount_point is not None, mount_point))
 
     btn_frame = ttk.Frame(dlg, padding=(10, 6))
     btn_frame.pack(fill=tk.X)
 
-    warn_lbl = tk.Label(btn_frame, text="", bg=theme.BG, fg=theme.WARNING,
-                        font=theme.FONT_SMALL)
+    warn_lbl = tk.Label(
+        btn_frame,
+        text="",
+        bg=theme.BG,
+        fg=theme.WARNING,
+        font=theme.FONT_SMALL,
+    )
     warn_lbl.pack(side=tk.LEFT, padx=(6, 0))
 
-    def on_select():
+    def on_select() -> None:
         sel = lb.curselection()
         if not sel:
-            warn_lbl.config(text="⚠  Veuillez sélectionner une partition.")
+            warn_lbl.config(text="⚠ Veuillez sélectionner une partition.")
             return
+
         entry = entries[sel[0]]
         if entry is None:
-            warn_lbl.config(text="⚠  Sélectionnez une partition, pas un en-tête de disque.")
+            warn_lbl.config(text="⚠ Sélectionnez une partition, pas un en-tête de disque.")
             return
+
         warn_lbl.config(text="")
-        result.update({"partition": entry[0],
-                        "already_mounted": entry[1],
-                        "mount_point": entry[2]})
+        result.update(
+            {
+                "partition": entry[0],
+                "already_mounted": entry[1],
+                "mount_point": entry[2],
+            }
+        )
         dlg.destroy()
 
-    ttk.Button(btn_frame, text="Sélectionner", style="Primary.TButton", command=on_select).pack(side=tk.LEFT, padx=4)
+    ttk.Button(
+        btn_frame,
+        text="Sélectionner",
+        style="Primary.TButton",
+        command=on_select,
+    ).pack(side=tk.LEFT, padx=4)
     ttk.Button(btn_frame, text="Annuler", command=dlg.destroy).pack(side=tk.LEFT, padx=4)
 
     dlg.update_idletasks()
-    w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
-    x = parent.winfo_rootx() + (parent.winfo_width()  - w) // 2
-    y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
-    dlg.geometry(f"+{x}+{y}")
+    width, height = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+    x_pos = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
+    y_pos = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
+    dlg.geometry(f"+{x_pos}+{y_pos}")
     parent.wait_window(dlg)
 
     return result["partition"], result["already_mounted"], result["mount_point"]
 
 
-def _request_external_export_path(parent: tk.Widget,
-                                  default_filename: str,
-                                  status_callback=None) -> tuple[str | None, str | None]:
+def _request_external_export_path(
+    parent: tk.Widget,
+    default_filename: str,
+    status_callback=None,
+) -> tuple[str | None, str | None]:
     """
     Full export-path workflow: detect → pick → mount → save-as dialog.
 
     Returns (chosen_path, mount_dir_to_unmount_after_write)
-    or       (None, None) if cancelled / error.
+    or (None, None) if cancelled / error.
     The caller must call _unmount_partition(mount_dir) after the file is written.
     """
     def _status(msg: str) -> None:
@@ -331,9 +389,12 @@ def _request_external_export_path(parent: tk.Widget,
 
     external_disks = _get_external_disks()
     if not external_disks:
-        _show_dark_error(parent, "Aucun support externe détecté",
-                         "Aucun disque externe n'a été trouvé.\n\n"
-                         "Connectez une clé USB ou un disque externe et réessayez.")
+        _show_dark_error(
+            parent,
+            "Aucun support externe détecté",
+            "Aucun disque externe n'a été trouvé.\n\n"
+            "Connectez une clé USB ou un disque externe et réessayez.",
+        )
         return None, None
 
     partition, already_mounted, existing_mp = _show_disk_picker(parent, external_disks)
@@ -348,9 +409,10 @@ def _request_external_export_path(parent: tk.Widget,
         mount_point = _mount_partition(partition)
         if not mount_point:
             _show_dark_error(
-                parent, "Erreur de montage",
+                parent,
+                "Erreur de montage",
                 f"Impossible de monter /dev/{partition}.\n\n"
-                "Vérifiez que le périphérique est correctement connecté."
+                "Vérifiez que le périphérique est correctement connecté.",
             )
             return None, None
         pending_unmount = mount_point
@@ -369,13 +431,15 @@ def _request_external_export_path(parent: tk.Widget,
             _unmount_partition(pending_unmount)
         return None, None
 
-    # Validate destination is on the external mount
-    mp_norm   = mount_point.rstrip("/") + "/"
+    mp_norm = mount_point.rstrip("/") + "/"
     path_norm = os.path.abspath(chosen_path).rstrip("/") + "/"
     if not path_norm.startswith(mp_norm):
-        _show_dark_warning(parent, "Destination invalide",
-                           f"Le chemin choisi n'est pas sur le support externe.\n"
-                           f"Choisissez un emplacement sous : {mount_point}")
+        _show_dark_warning(
+            parent,
+            "Destination invalide",
+            f"Le chemin choisi n'est pas sur le support externe.\n"
+            f"Choisissez un emplacement sous : {mount_point}",
+        )
         if pending_unmount:
             _unmount_partition(pending_unmount)
         return None, None
@@ -383,17 +447,10 @@ def _request_external_export_path(parent: tk.Widget,
     return chosen_path, pending_unmount
 
 
-# ── Log file selection dialog ─────────────────────────────────────────────────
-
 class LogFileSelectionDialog(tk.Toplevel):
     """
     Modal dialog that lists all available log files with individual checkboxes
     and Select All / Deselect All convenience buttons.
-
-    Usage:
-        dlg = LogFileSelectionDialog(parent, log_files)
-        # dlg.selected_files is a list of paths chosen by the user,
-        # or None if the dialog was cancelled.
     """
 
     def __init__(self, parent: tk.Widget, log_files: List[str]) -> None:
@@ -412,27 +469,39 @@ class LogFileSelectionDialog(tk.Toplevel):
         self._center(parent)
         self.wait_window()
 
-    # ── UI ─────────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
-        ttk.Label(self,
-                  text="Choisissez les fichiers à copier sur le support externe :",
-                  font=("Arial", 10, "bold"),
-                  padding=(12, 10, 12, 4)).pack(fill=tk.X)
+        ttk.Label(
+            self,
+            text="Choisissez les fichiers à copier sur le support externe :",
+            font=("Arial", 10, "bold"),
+            padding=(12, 10, 12, 4),
+        ).pack(fill=tk.X)
 
-        # ── Select All / Deselect All ──
         ctrl_frame = ttk.Frame(self, padding=(12, 0, 12, 6))
         ctrl_frame.pack(fill=tk.X)
-        ttk.Button(ctrl_frame, text="Tout sélectionner",
-                   command=self._select_all, width=18).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(ctrl_frame, text="Tout désélectionner",
-                   command=self._deselect_all, width=18).pack(side=tk.LEFT)
+        ttk.Button(
+            ctrl_frame,
+            text="Tout sélectionner",
+            command=self._select_all,
+            width=18,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            ctrl_frame,
+            text="Tout désélectionner",
+            command=self._deselect_all,
+            width=18,
+        ).pack(side=tk.LEFT)
 
-        # ── File list with checkboxes ──
         list_outer = ttk.Frame(self, padding=(10, 0, 10, 6))
         list_outer.pack(fill=tk.BOTH, expand=True)
 
-        canvas = tk.Canvas(list_outer, width=520, height=min(240, len(self._log_files) * 28 + 10),
-                           highlightthickness=0, bg=theme.BG_CARD)
+        canvas = tk.Canvas(
+            list_outer,
+            width=520,
+            height=min(240, len(self._log_files) * 28 + 10),
+            highlightthickness=0,
+            bg=theme.BG_CARD,
+        )
         sb = ttk.Scrollbar(list_outer, orient=tk.VERTICAL, command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -441,22 +510,24 @@ class LogFileSelectionDialog(tk.Toplevel):
         inner = ttk.Frame(canvas)
         canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        def _on_configure(event):
+        def _on_configure(_event) -> None:
             canvas.configure(scrollregion=canvas.bbox("all"))
             canvas.itemconfig(canvas_window, width=canvas.winfo_width())
 
         inner.bind("<Configure>", _on_configure)
         canvas.bind("<Configure>", _on_configure)
 
-        # Mouse-wheel scrolling
-        def _on_mousewheel(event):
+        def _on_mousewheel(event) -> None:
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        self.protocol("WM_DELETE_WINDOW", lambda: (
-            canvas.unbind_all("<MouseWheel>"), self._cancel()))
+        self.protocol(
+            "WM_DELETE_WINDOW",
+            lambda: (canvas.unbind_all("<MouseWheel>"), self._cancel()),
+        )
 
         for path in self._log_files:
-            var = tk.BooleanVar(value=True)   # all selected by default
+            var = tk.BooleanVar(value=True)
             self._vars.append(var)
 
             row = ttk.Frame(inner)
@@ -464,61 +535,71 @@ class LogFileSelectionDialog(tk.Toplevel):
 
             ttk.Checkbutton(row, variable=var).pack(side=tk.LEFT)
 
-            # File info: name + size + mtime
             name = os.path.basename(path)
             try:
-                stat   = os.stat(path)
-                size   = _human_size(stat.st_size)
-                mtime  = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-                label  = f"{name:<40}  {size:>8}   {mtime}"
+                stat = os.stat(path)
+                size = _human_size(stat.st_size)
+                mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+                label = f"{name:<40} {size:>8} {mtime}"
             except OSError:
-                label  = f"{name}  (illisible)"
+                label = f"{name} (illisible)"
 
             ttk.Label(row, text=label, font=("Courier", 9)).pack(side=tk.LEFT, padx=(4, 0))
 
-        # ── Counter label ──
         self._count_var = tk.StringVar()
         self._update_count()
-        for v in self._vars:
-            v.trace_add("write", lambda *_: self._update_count())
+        for var in self._vars:
+            var.trace_add("write", lambda *_: self._update_count())
 
-        ttk.Label(self, textvariable=self._count_var,
-                  foreground="#555555",
-                  padding=(12, 0, 12, 4)).pack(fill=tk.X)
+        ttk.Label(
+            self,
+            textvariable=self._count_var,
+            foreground="#555555",
+            padding=(12, 0, 12, 4),
+        ).pack(fill=tk.X)
 
-        # ── Action buttons ──
         ttk.Separator(self).pack(fill=tk.X, padx=10, pady=4)
-        self._warn_lbl = tk.Label(self, text="", bg=theme.BG, fg=theme.WARNING,
-                                   font=theme.FONT_SMALL)
+        self._warn_lbl = tk.Label(
+            self,
+            text="",
+            bg=theme.BG,
+            fg=theme.WARNING,
+            font=theme.FONT_SMALL,
+        )
         self._warn_lbl.pack(anchor="w", padx=12)
+
         btn_frame = ttk.Frame(self, padding=(10, 0, 10, 10))
         btn_frame.pack(fill=tk.X)
-        ttk.Button(btn_frame, text="Exporter la sélection",
-                   style="Primary.TButton",
-                   command=self._confirm, width=18).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="Annuler",
-                   command=self._cancel, width=12).pack(side=tk.LEFT)
+        ttk.Button(
+            btn_frame,
+            text="Exporter la sélection",
+            style="Primary.TButton",
+            command=self._confirm,
+            width=18,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            btn_frame,
+            text="Annuler",
+            command=self._cancel,
+            width=12,
+        ).pack(side=tk.LEFT)
 
-    # ── Helpers ────────────────────────────────────────────────────────────────
     def _select_all(self) -> None:
-        for v in self._vars:
-            v.set(True)
+        for var in self._vars:
+            var.set(True)
 
     def _deselect_all(self) -> None:
-        for v in self._vars:
-            v.set(False)
+        for var in self._vars:
+            var.set(False)
 
     def _update_count(self) -> None:
-        n = sum(v.get() for v in self._vars)
-        self._count_var.set(f"{n} sur {len(self._vars)} fichier(s) sélectionné(s)")
+        count = sum(var.get() for var in self._vars)
+        self._count_var.set(f"{count} sur {len(self._vars)} fichier(s) sélectionné(s)")
 
     def _confirm(self) -> None:
-        chosen = [p for p, v in zip(self._log_files, self._vars) if v.get()]
+        chosen = [path for path, var in zip(self._log_files, self._vars) if var.get()]
         if not chosen:
-            try:
-                self._warn_lbl.config(text="⚠  Sélectionnez au moins un fichier.")
-            except AttributeError:
-                pass
+            self._warn_lbl.config(text="⚠ Sélectionnez au moins un fichier.")
             return
         self.selected_files = chosen
         self.destroy()
@@ -529,7 +610,7 @@ class LogFileSelectionDialog(tk.Toplevel):
 
     def _center(self, parent: tk.Widget) -> None:
         self.update_idletasks()
-        px = parent.winfo_rootx() + (parent.winfo_width()  - self.winfo_width())  // 2
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
         py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{px}+{py}")
 
@@ -561,320 +642,117 @@ class AdminInterface(tk.Toplevel):
         self._build_ui()
         self._refresh_stats()
 
-    # ── UI construction ────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         C = theme
 
-        # Appliquer le thème sombre
         self.configure(bg=C.BG)
 
-        # Conteneur principal
         main_frame = ttk.Frame(self, style="TFrame", padding=(20, 16))
         main_frame.pack(fill="both", expand=True)
 
-        # ── Zone basse ancrée en premier (toujours visible) ───────────────
         bottom_frame = ttk.Frame(main_frame, style="TFrame")
         bottom_frame.pack(side="bottom", fill="x")
 
-        # NotificationBar en tout bas
-        _notif_container = ttk.Frame(bottom_frame)
-        _notif_container.pack(fill=tk.X)
-        _notif_container.grid_columnconfigure(0, weight=1)
-        self.notif_bar = theme.NotificationBar(_notif_container)
+        notif_container = ttk.Frame(bottom_frame)
+        notif_container.pack(fill=tk.X)
+        notif_container.grid_columnconfigure(0, weight=1)
+        self.notif_bar = theme.NotificationBar(notif_container)
 
         ttk.Separator(bottom_frame, orient="horizontal").pack(fill="x", pady=(8, 4))
 
         status_bar = ttk.Frame(bottom_frame, style="TFrame")
         status_bar.pack(fill="x", pady=(0, 6))
-        ttk.Label(status_bar, text="Statut :", font=C.FONT_NORMAL,
-                  style="Card.TLabel").pack(side="left")
-        ttk.Label(status_bar, textvariable=self._status_var,
-                  foreground=C.SUCCESS, font=C.FONT_NORMAL).pack(side="left", padx=6)
-        ttk.Button(bottom_frame, text="Fermer le panneau",
-                   command=self.destroy, style="Primary.TButton",
-                   width=20).pack(pady=(0, 8))
+        ttk.Label(
+            status_bar,
+            text="Statut :",
+            font=C.FONT_NORMAL,
+            style="Card.TLabel",
+        ).pack(side="left")
+        ttk.Label(
+            status_bar,
+            textvariable=self._status_var,
+            foreground=C.SUCCESS,
+            font=C.FONT_NORMAL,
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            bottom_frame,
+            text="Fermer le panneau",
+            command=self.destroy,
+            style="Primary.TButton",
+            width=20,
+        ).pack(pady=(0, 8))
 
-        # ── En-tête ───────────────────────────────────────────────────────
         header_frame = ttk.Frame(main_frame, style="TFrame")
         header_frame.pack(fill="x", pady=(0, 18))
 
-        ttk.Label(header_frame, text="Panneau d'administration",
-                  style="Title.TLabel").pack(anchor="center")
-        ttk.Label(header_frame, text="Convertisseur P2V — Accès administrateur",
-                  style="Subtitle.TLabel").pack(anchor="center", pady=(2, 0))
+        ttk.Label(
+            header_frame,
+            text="Panneau d'administration",
+            style="Title.TLabel",
+        ).pack(anchor="center")
+        ttk.Label(
+            header_frame,
+            text="Convertisseur P2V — Accès administrateur",
+            style="Subtitle.TLabel",
+        ).pack(anchor="center", pady=(2, 0))
 
         ttk.Separator(main_frame, orient="horizontal").pack(fill="x", pady=(0, 16))
 
-        # ── Statistiques ──────────────────────────────────────────────────
-        stats_frame = ttk.LabelFrame(main_frame, text="Statistiques",
-                                     style="TLabelframe")
+        stats_frame = ttk.LabelFrame(
+            main_frame,
+            text="Statistiques",
+            style="TLabelframe",
+        )
         stats_frame.pack(fill="x", pady=(0, 12))
 
         stats_inner = ttk.Frame(stats_frame, style="TFrame")
         stats_inner.pack(anchor="w")
 
         self._count_var = tk.StringVar(value="—")
-        ttk.Label(stats_inner, text="Machines virtualisées (total) :",
-                  font=C.FONT_NORMAL, style="Card.TLabel").pack(side="left")
-        ttk.Label(stats_inner, textvariable=self._count_var,
-                  font=("Segoe UI", 22, "bold"),
-                  foreground=C.SUCCESS).pack(side="left", padx=12)
-        ttk.Button(stats_inner, text="↻  Actualiser",
-                   command=self._refresh_stats).pack(side="left", padx=8)
+        ttk.Label(
+            stats_inner,
+            text="Machines virtualisées (total) :",
+            font=C.FONT_NORMAL,
+            style="Card.TLabel",
+        ).pack(side="left")
+        ttk.Label(
+            stats_inner,
+            textvariable=self._count_var,
+            font=("Segoe UI", 22, "bold"),
+            foreground=C.SUCCESS,
+        ).pack(side="left", padx=12)
+        ttk.Button(
+            stats_inner,
+            text="↻ Actualiser",
+            command=self._refresh_stats,
+        ).pack(side="left", padx=8)
 
-        # ── Rapports PDF ──────────────────────────────────────────────────
-        pdf_frame = ttk.LabelFrame(main_frame,
-                                   text="Rapports PDF — Export sur support externe",
-                                   style="TLabelframe")
-        pdf_frame.pack(fill="x", pady=(0, 12))
-
-        pdf_btns = ttk.Frame(pdf_frame, style="TFrame")
-        pdf_btns.pack(anchor="w")
-        ttk.Button(pdf_btns,
-                   text="→  Rapport de session (PDF) → USB…",
-                   style="Primary.TButton",
-                   command=self._export_session_pdf,
-                   width=46).pack(side="left", padx=(0, 8), pady=2)
-        ttk.Button(pdf_btns,
-                   text="→  Journal complet (PDF) → USB…",
-                   style="Primary.TButton",
-                   command=self._export_full_pdf,
-                   width=46).pack(side="left", pady=2)
-
-        # ── Export brut des journaux ───────────────────────────────────────
-        raw_frame = ttk.LabelFrame(main_frame,
-                                   text="Export brut des journaux — Support externe",
-                                   style="TLabelframe")
-        raw_frame.pack(fill="x", pady=(0, 12))
-
-        ttk.Label(raw_frame,
-                  text="Sélectionnez les fichiers journaux (courant + archivés) à copier sur le périphérique externe.",
-                  font=C.FONT_NORMAL, style="Card.TLabel").pack(anchor="w", pady=(0, 6))
-        ttk.Button(raw_frame,
-                   text="→  Exporter les journaux bruts → USB…",
-                   command=self._export_raw_logs,
-                   width=40).pack(anchor="w")
-
-        # ── Maintenance ───────────────────────────────────────────────────
-        maint_frame = ttk.LabelFrame(main_frame, text="Maintenance",
-                                     style="TLabelframe")
-        maint_frame.pack(fill="x", pady=(0, 12))
-
-        maint_btns = ttk.Frame(maint_frame, style="TFrame")
-        maint_btns.pack(anchor="w")
-        ttk.Button(maint_btns,
-                   text="×  Purger tous les journaux",
-                   style="Danger.TButton",
-                   command=self._purge_logs,
-                   width=26).pack(side="left", padx=(0, 8), pady=4)
-        ttk.Button(maint_btns,
-                   text="◇  Changer le mot de passe admin",
-                   command=self._change_password,
-                   width=30).pack(side="left", pady=4)
-
-        # ── Système ───────────────────────────────────────────────────────
-        sys_frame = ttk.LabelFrame(main_frame, text="Système",
-                                   style="TLabelframe")
-        sys_frame.pack(fill="x", pady=(0, 12))
-
-        sys_btns = ttk.Frame(sys_frame, style="TFrame")
-        sys_btns.pack(anchor="w")
-        ttk.Button(sys_btns, text="■  Éteindre",
-                   style="Danger.TButton",
-                   command=self._shutdown, width=16).pack(side="left", padx=(0, 8), pady=4)
-        ttk.Button(sys_btns, text="↺  Redémarrer",
-                   command=self._reboot, width=16).pack(side="left", padx=(0, 8), pady=4)
-        ttk.Button(sys_btns, text="←  Quitter vers l'OS",
-                   command=self._exit_to_os, width=20).pack(side="left", pady=4)
-
-    # ── Centering ──────────────────────────────────────────────────────────────
-    def _center(self) -> None:
-        self.update_idletasks()
-        px = self._parent.winfo_rootx() + (self._parent.winfo_width()  - self.winfo_width())  // 2
-        py = self._parent.winfo_rooty() + (self._parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{px}+{py}")
-
-    def _notify(self, message: str, level: str = "info",
-                confirm: bool = False, on_yes=None, on_no=None) -> None:
-        """Affiche une notification inline sans pop-up."""
-        try:
-            self.notif_bar.show(message, level=level, confirm=confirm,
-                                on_yes=on_yes, on_no=on_no,
-                                auto_hide=not confirm)
-        except AttributeError:
-            print(f"[{level.upper()}] {message}")
-
-    def _set_status(self, msg: str) -> None:
-        self._status_var.set(msg)
-        self.update_idletasks()
-
-    # ── Actions ───────────────────────────────────────────────────────────────
     def _refresh_stats(self) -> None:
         self._count_var.set(str(get_conversion_count()))
 
-    # -- PDF session export ----------------------------------------------------
-    def _export_session_pdf(self) -> None:
-        ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"p2v_session_{ts}.pdf"
+    def _set_status(self, message: str) -> None:
+        self._status_var.set(message)
+        self.update_idletasks()
 
-        chosen_path, to_unmount = _request_external_export_path(
-            self, default_name, self._set_status)
-        if not chosen_path:
-            self._set_status("Export annulé.")
-            return
-
+    def _notify(
+        self,
+        message: str,
+        level: str = "info",
+        confirm: bool = False,
+        on_yes=None,
+        on_no=None,
+    ) -> None:
         try:
-            self._set_status("Génération du PDF…")
-            pdf_path = generate_session_pdf(output_path=chosen_path)
-            if to_unmount:
-                self._set_status("Démontage du périphérique…")
-                _unmount_partition(to_unmount)
-            self._notify(f"PDF de session exporté — {pdf_path}", level="success")
-            log_info(f"Admin: session PDF exported to external storage: {pdf_path}")
-        except ValueError as e:
-            self._notify(str(e), level="warning")
-        except (PermissionError, OSError) as e:
-            self._notify(f"Impossible de créer le PDF — {e}", level="error")
-            log_error(f"Admin: session PDF export error: {e}")
-        finally:
-            self._set_status("Prêt")
+            self.notif_bar.show(
+                message=message,
+                level=level,
+                confirm=confirm,
+                on_yes=on_yes,
+                on_no=on_no,
+            )
+        except Exception:
+            self._status_var.set(message)
 
-    # -- PDF full log export ---------------------------------------------------
-    def _export_full_pdf(self) -> None:
-        ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"p2v_complete_log_{ts}.pdf"
-
-        chosen_path, to_unmount = _request_external_export_path(
-            self, default_name, self._set_status)
-        if not chosen_path:
-            self._set_status("Export annulé.")
-            return
-
-        try:
-            self._set_status("Génération du PDF…")
-            pdf_path = generate_log_file_pdf(output_path=chosen_path)
-            if to_unmount:
-                self._set_status("Démontage du périphérique…")
-                _unmount_partition(to_unmount)
-            self._notify(f"PDF journal complet exporté — {pdf_path}", level="success")
-            log_info(f"Admin: complete log PDF exported to external storage: {pdf_path}")
-        except ValueError as e:
-            self._notify(str(e), level="warning")
-        except (PermissionError, OSError) as e:
-            self._notify(f"Impossible de créer le PDF — {e}", level="error")
-            log_error(f"Admin: complete log PDF export error: {e}")
-        finally:
-            self._set_status("Prêt")
-
-    # -- Raw log export --------------------------------------------------------
-    def _export_raw_logs(self) -> None:
-        all_log_files = get_all_log_files()
-        if not all_log_files:
-            self._notify("Aucun fichier journal trouvé.", level="warning")
-            return
-
-        # ── Step 1: let the user choose which files to export ──
-        selector = LogFileSelectionDialog(self, all_log_files)
-        log_files = selector.selected_files
-        if not log_files:
-            self._set_status("Export annulé.")
-            return
-
-        ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"p2v_logs_{ts}"   # destination sub-directory name
-
-        # ── Step 2: pick the external device ──
-        external_disks = _get_external_disks()
-        if not external_disks:
-            self._notify("Aucun disque externe détecté — branchez une clé USB et réessayez.", level="error")
-            return
-
-        partition, already_mounted, existing_mp = _show_disk_picker(self, external_disks)
-        if not partition:
-            return
-
-        pending_unmount = None
-        if already_mounted and existing_mp:
-            mount_point = existing_mp
-        else:
-            self._set_status(f"Montage de /dev/{partition}…")
-            mount_point = _mount_partition(partition)
-            if not mount_point:
-                self._notify(f"Impossible de monter /dev/{partition} — vérifiez le périphérique.", level="error")
-                self._set_status("Prêt")
-                return
-            pending_unmount = mount_point
-
-        # ── Step 3: destination folder on the external device ──
-        dest_dir = filedialog.askdirectory(
-            title="Choisir le dossier de destination sur le support externe",
-            initialdir=mount_point,
-            parent=self,
-        )
-        if not dest_dir:
-            if pending_unmount:
-                _unmount_partition(pending_unmount)
-            self._set_status("Export annulé.")
-            return
-
-        # Validate destination is on the mount point
-        mp_norm  = mount_point.rstrip("/") + "/"
-        dir_norm = os.path.abspath(dest_dir).rstrip("/") + "/"
-        if not dir_norm.startswith(mp_norm):
-            self._notify(f"Destination invalide — choisissez un dossier sous : {mount_point}", level="warning")
-            if pending_unmount:
-                _unmount_partition(pending_unmount)
-            self._set_status("Prêt")
-            return
-
-        # ── Step 4: copy selected files ──
-        export_subdir = os.path.join(dest_dir, default_name)
-        try:
-            os.makedirs(export_subdir, exist_ok=True)
-            copied, errors = 0, []
-            for lf in log_files:
-                dest_file = os.path.join(export_subdir, os.path.basename(lf))
-                self._set_status(f"Copie de {os.path.basename(lf)}…")
-                try:
-                    shutil.copy2(lf, dest_file)
-                    copied += 1
-                except OSError as e:
-                    errors.append(f"{os.path.basename(lf)}: {e}")
-
-            if pending_unmount:
-                self._set_status("Démontage du périphérique…")
-                _unmount_partition(pending_unmount)
-                pending_unmount = None
-
-            summary = f"{copied} sur {len(log_files)} fichier(s) copié(s) vers :\n{export_subdir}"
-            if errors:
-                summary += f"\n\nErreurs ({len(errors)}):\n" + "\n".join(errors)
-                self._notify(summary, level="warning")
-            else:
-                self._notify(summary, level="success")
-            log_info(f"Admin: {copied} raw log file(s) exported to {export_subdir}")
-
-        except (PermissionError, OSError) as e:
-            self._notify(f"Export échoué — {e}", level="error")
-            log_error(f"Admin: raw log export error: {e}")
-        finally:
-            if pending_unmount:
-                _unmount_partition(pending_unmount)
-            self._set_status("Prêt")
-
-    # -- Log purge -------------------------------------------------------------
-    def _purge_logs(self) -> None:
-        self._notify(
-            "Supprimer TOUS les fichiers journaux ? Action irréversible.",
-            level="warning", confirm=True,
-            on_yes=self._do_purge_logs, on_no=None,
-        )
-
-    def _do_purge_logs(self) -> None:
-        purge_logs()
-        self._notify("Tous les fichiers journaux ont été supprimés.", level="success")
-
-    # -- Password change -------------------------------------------------------
     def _change_password(self) -> None:
         win = tk.Toplevel(self)
         win.title("Changer le mot de passe")
@@ -882,27 +760,33 @@ class AdminInterface(tk.Toplevel):
         win.grab_set()
 
         fields: dict[str, ttk.Entry] = {}
-        for label in ("Mot de passe actuel :", "Nouveau mot de passe :", "Confirmer le nouveau :"):
+        for label in (
+            "Mot de passe actuel :",
+            "Nouveau mot de passe :",
+            "Confirmer le nouveau :",
+        ):
             ttk.Label(win, text=label).pack(anchor="w", padx=20, pady=(8, 0))
-            e = ttk.Entry(win, show="•", width=26)
-            e.pack(padx=20, pady=2)
-            fields[label] = e
+            entry = ttk.Entry(win, show="•", width=26)
+            entry.pack(padx=20, pady=2)
+            fields[label] = entry
 
         err_var = tk.StringVar()
         ttk.Label(win, textvariable=err_var, foreground="red").pack(pady=2)
 
         def submit() -> None:
-            old = fields["Mot de passe actuel :"].get()
-            new = fields["Nouveau mot de passe :"].get()
-            cnf = fields["Confirmer le nouveau :"].get()
-            if len(new) < 8:
+            old_password = fields["Mot de passe actuel :"].get()
+            new_password = fields["Nouveau mot de passe :"].get()
+            confirm_password = fields["Confirmer le nouveau :"].get()
+
+            if len(new_password) < 8:
                 err_var.set("Le nouveau mot de passe doit comporter au moins 8 caractères.")
                 return
-            if new != cnf:
+            if new_password != confirm_password:
                 err_var.set("Les nouveaux mots de passe ne correspondent pas.")
                 return
+
             try:
-                change_password(old, new)
+                change_password(old_password, new_password)
                 win.destroy()
                 self._notify("Mot de passe modifié avec succès.", level="success")
                 log_info("Mot de passe administrateur modifié.")
@@ -911,10 +795,27 @@ class AdminInterface(tk.Toplevel):
 
         ttk.Button(win, text="Confirmer", command=submit).pack(pady=10)
 
-    # -- System actions --------------------------------------------------------
+    def _purge_logs(self) -> None:
+        self._notify(
+            "Supprimer TOUS les fichiers journaux ? Action irréversible.",
+            level="warning",
+            confirm=True,
+            on_yes=self._do_purge_logs,
+            on_no=None,
+        )
+
+    def _do_purge_logs(self) -> None:
+        purge_logs()
+        self._notify("Tous les fichiers journaux ont été supprimés.", level="success")
+
     def _shutdown(self) -> None:
-        self._notify("Éteindre le système maintenant ?", level="warning",
-                     confirm=True, on_yes=self._do_shutdown, on_no=None)
+        self._notify(
+            "Éteindre le système maintenant ?",
+            level="warning",
+            confirm=True,
+            on_yes=self._do_shutdown,
+            on_no=None,
+        )
 
     def _do_shutdown(self) -> None:
         log_application_exit("System shutdown via admin panel")
@@ -927,8 +828,13 @@ class AdminInterface(tk.Toplevel):
                 subprocess.run(["poweroff"], check=False)
 
     def _reboot(self) -> None:
-        self._notify("Redémarrer le système maintenant ?", level="warning",
-                     confirm=True, on_yes=self._do_reboot, on_no=None)
+        self._notify(
+            "Redémarrer le système maintenant ?",
+            level="warning",
+            confirm=True,
+            on_yes=self._do_reboot,
+            on_no=None,
+        )
 
     def _do_reboot(self) -> None:
         log_application_exit("System reboot via admin panel")
@@ -938,8 +844,13 @@ class AdminInterface(tk.Toplevel):
             subprocess.run(["shutdown", "-r", "now"], check=False)
 
     def _exit_to_os(self) -> None:
-        self._notify("Fermer le convertisseur P2V et retourner à l'OS ?", level="warning",
-                     confirm=True, on_yes=self._do_exit_to_os, on_no=None)
+        self._notify(
+            "Fermer le convertisseur P2V et retourner à l'OS ?",
+            level="warning",
+            confirm=True,
+            on_yes=self._do_exit_to_os,
+            on_no=None,
+        )
 
     def _do_exit_to_os(self) -> None:
         log_application_exit("Exit to OS via admin panel")
@@ -952,41 +863,81 @@ class AdminInterface(tk.Toplevel):
         self._parent.destroy()
 
 
-# ── Dark-themed inline message helpers ───────────────────────────────────────
 def _show_dark_error(parent, title: str, message: str) -> None:
-    """Affiche une erreur dans un Toplevel sombre (pas de messagebox système)."""
+    """Affiche une erreur dans un Toplevel sombre."""
     _show_dark_dialog(parent, title, message, level="error")
+
 
 def _show_dark_warning(parent, title: str, message: str) -> None:
     """Affiche un avertissement dans un Toplevel sombre."""
     _show_dark_dialog(parent, title, message, level="warning")
 
+
 def _show_dark_dialog(parent, title: str, message: str, level: str = "info") -> None:
     import theme as _theme
-    _ICONS = {"error": "✖", "warning": "⚠", "info": "ℹ", "success": "✔"}
-    _FG    = {"error": _theme.ERROR, "warning": _theme.WARNING, "info": _theme.INFO, "success": _theme.SUCCESS}
+
+    icons = {"error": "✖", "warning": "⚠", "info": "ℹ", "success": "✔"}
+    fg_map = {
+        "error": _theme.ERROR,
+        "warning": _theme.WARNING,
+        "info": _theme.INFO,
+        "success": _theme.SUCCESS,
+    }
+
     win = tk.Toplevel(parent)
     win.title(title)
     win.resizable(False, False)
     win.grab_set()
     _theme.apply_theme(win)
+
     frm = tk.Frame(win, bg=_theme.BG_CARD, padx=24, pady=20)
     frm.pack(fill="both", expand=True)
+
     hdr = tk.Frame(frm, bg=_theme.BG_CARD)
     hdr.pack(fill="x", pady=(0, 12))
-    tk.Label(hdr, text=_ICONS.get(level, "ℹ"), fg=_FG.get(level, _theme.TEXT_PRIMARY),
-             bg=_theme.BG_CARD, font=("Segoe UI", 20)).pack(side="left", padx=(0, 10))
-    tk.Label(hdr, text=title, fg=_theme.TEXT_PRIMARY,
-             bg=_theme.BG_CARD, font=_theme.FONT_SUBTITLE).pack(side="left")
-    tk.Label(frm, text=message, fg=_theme.TEXT_SECONDARY,
-             bg=_theme.BG_CARD, font=_theme.FONT_NORMAL,
-             wraplength=380, justify="left").pack(anchor="w", pady=(0, 16))
-    tk.Button(frm, text="OK", bg=_theme.ACCENT, fg="#ffffff",
-              activebackground=_theme.ACCENT_DARK,
-              relief="flat", padx=20, pady=6, font=_theme.FONT_BTN_PRIMARY,
-              cursor="hand2", bd=0, command=win.destroy).pack()
+
+    tk.Label(
+        hdr,
+        text=icons.get(level, "ℹ"),
+        fg=fg_map.get(level, _theme.TEXT_PRIMARY),
+        bg=_theme.BG_CARD,
+        font=("Segoe UI", 20),
+    ).pack(side="left", padx=(0, 10))
+    tk.Label(
+        hdr,
+        text=title,
+        fg=_theme.TEXT_PRIMARY,
+        bg=_theme.BG_CARD,
+        font=_theme.FONT_SUBTITLE,
+    ).pack(side="left")
+
+    tk.Label(
+        frm,
+        text=message,
+        fg=_theme.TEXT_SECONDARY,
+        bg=_theme.BG_CARD,
+        font=_theme.FONT_NORMAL,
+        wraplength=380,
+        justify="left",
+    ).pack(anchor="w", pady=(0, 16))
+
+    tk.Button(
+        frm,
+        text="OK",
+        bg=_theme.ACCENT,
+        fg="#ffffff",
+        activebackground=_theme.ACCENT_DARK,
+        relief="flat",
+        padx=20,
+        pady=6,
+        font=_theme.FONT_BTN_PRIMARY,
+        cursor="hand2",
+        bd=0,
+        command=win.destroy,
+    ).pack()
+
     win.update_idletasks()
-    px = parent.winfo_rootx() + (parent.winfo_width()  - win.winfo_width())  // 2
+    px = parent.winfo_rootx() + (parent.winfo_width() - win.winfo_width()) // 2
     py = parent.winfo_rooty() + (parent.winfo_height() - win.winfo_height()) // 2
     win.geometry(f"+{px}+{py}")
     win.wait_window()
@@ -1002,9 +953,22 @@ def open_admin_panel(parent: tk.Widget) -> None:
 
     dlg = PasswordDialog(parent, title="Accès administration")
     if dlg.result is None:
-        return   # cancelled
+        return
 
-    if not verify_password(dlg.result):
+    ok, wait = verify_password_with_wait(dlg.result)
+
+    if wait > 0:
+        _show_dark_error(
+            parent,
+            "Accès temporairement verrouillé",
+            f"Trop de tentatives. Réessayez dans {wait} seconde(s).",
+        )
+        log_error(
+            f"Tentative de connexion admin refusée : verrouillage temporaire ({wait}s restantes)."
+        )
+        return
+
+    if not ok:
         _show_dark_error(parent, "Accès refusé", "Mot de passe incorrect.")
         log_error("Tentative de connexion admin échouée (mot de passe incorrect).")
         return
