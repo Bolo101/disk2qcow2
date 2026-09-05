@@ -180,7 +180,7 @@ class P2VConverterGUI:
         brand = tk.Frame(header, bg=C.BG_CARD)
         brand.grid(row=0, column=0, sticky="ew", padx=(16, 10), pady=10)
 
-        tk.Label(brand, text="Convertisseur P2V",
+        tk.Label(brand, text="VirtuPack",
                  font=C.FONT_TITLE, bg=C.BG_CARD, fg=C.TEXT_PRIMARY
                  ).pack(anchor="w")
         tk.Label(brand, text="Conversion Physique vers Machine Virtuelle",
