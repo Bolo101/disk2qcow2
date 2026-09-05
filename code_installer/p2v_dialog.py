@@ -88,7 +88,7 @@ class P2VConverterGUI:
         self.root.minsize(800, 600)
         
         # Configure grid weights for responsive design
-        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
         
         # Set window icon (if available)
@@ -191,7 +191,7 @@ class P2VConverterGUI:
         # NotificationBar est isolée dans un Frame intermédiaire pour éviter
         # tout conflit pack/grid directement dans la fenêtre racine (.)
         _notif_container = ttk.Frame(self.root)
-        _notif_container.grid(row=3, column=0, sticky="ew")
+        _notif_container.grid(row=4, column=0, sticky="ew")
         _notif_container.grid_columnconfigure(0, weight=1)
         self.notif_bar = theme.NotificationBar(_notif_container)
     
@@ -242,7 +242,7 @@ class P2VConverterGUI:
         
         # Add separator
         separator = ttk.Separator(self.root, orient='horizontal')
-        separator.grid(row=0, column=0, sticky="ew", pady=(0, 5), columnspan=1)
+        separator.grid(row=1, column=0, sticky="ew", pady=(0, 5), columnspan=1)
 
     def _on_reboot_clicked(self):
         """Redémarre la machine, avec confirmation et garde-fou si une conversion est en cours."""
@@ -262,7 +262,7 @@ class P2VConverterGUI:
     def create_main_frame(self):
         """Create the main content frame with responsive layout"""
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        main_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
         main_frame.grid_rowconfigure(5, weight=1)
         main_frame.grid_columnconfigure(0, weight=1)
         
@@ -873,7 +873,7 @@ class P2VConverterGUI:
     def create_status_frame(self):
         """Create the status frame at the bottom with responsive layout"""
         status_frame = ttk.Frame(self.root, padding="10")
-        status_frame.grid(row=2, column=0, sticky="ew")
+        status_frame.grid(row=3, column=0, sticky="ew")
         status_frame.grid_columnconfigure(1, weight=1)
         
         # Get screen width to determine layout
